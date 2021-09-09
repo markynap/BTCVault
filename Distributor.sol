@@ -7,9 +7,10 @@ import "./Address.sol";
 import "./IERC20.sol";
 import "./IUniswapV2Router02.sol";
 import "./XTradeManager.sol";
+import "./ReentrantGuard.sol";
 
 /** Distributes Vault Tokens and Surge Tokens To Holders Varied on Weight */
-contract Distributor is IDistributor {
+contract Distributor is IDistributor, ReentrancyGuard {
     
     using SafeMath for uint256;
     using Address for address;
@@ -247,7 +248,7 @@ contract Distributor is IDistributor {
         && getUnpaidMainEarnings(shareholder) > minDistribution;
     }
 
-    function distributeParentDividend(address shareholder) internal {
+    function distributeParentDividend(address shareholder) internal nonReentrant {
         if(shares[shareholder].amount == 0){ return; }
 
         uint256 amount = getUnpaidParentEarnings(shareholder);
@@ -261,7 +262,7 @@ contract Distributor is IDistributor {
         }
     }
     
-    function distributeMainDividend(address shareholder) internal {
+    function distributeMainDividend(address shareholder) internal nonReentrant {
         if(shares[shareholder].amount == 0){ return; }
 
         uint256 amount = getUnpaidMainEarnings(shareholder);
