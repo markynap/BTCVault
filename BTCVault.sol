@@ -58,7 +58,7 @@ contract BTCVault is IERC20 {
     mapping (address => bool) isFeeExempt;
     mapping (address => bool) isTxLimitExempt;
     mapping (address => bool) isDividendExempt;
-    mapping (address => bool) isLiquidityPool;
+    mapping (address => bool) public isLiquidityPool;
     mapping (address => TokenLock) tokenLockers;
     
     // fees
@@ -69,7 +69,7 @@ contract BTCVault is IERC20 {
     uint256 totalFeeSells = 3000;
     uint256 totalFeeBuys = 500;
     uint256 totalFeeTransfers = 500;
-    uint256 feeDenominator = 10000;
+    uint256 constant feeDenominator = 10000;
     
     // Marketing Funds Receiver
     address public marketingFeeReceiver = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
@@ -120,12 +120,13 @@ contract BTCVault is IERC20 {
         // exempt deployer and contract from fees
         isFeeExempt[msg.sender] = true;
         isFeeExempt[address(this)] = true;
+        isFeeExempt[_distributor] = true;
         // exempt important addresses from TX limit
         isTxLimitExempt[msg.sender] = true;
         isTxLimitExempt[marketingFeeReceiver] = true;
         isTxLimitExempt[_distributor] = true;
         isTxLimitExempt[address(this)] = true;
-        // exempt this important addresses  from receiving ETH Rewards
+        // exempt important addresses from receiving Rewards
         isDividendExempt[pair] = true;
         isDividendExempt[address(this)] = true;
         isDividendExempt[_distributor] = true;
@@ -193,10 +194,10 @@ contract BTCVault is IERC20 {
     /** Internal Transfer */
     function _transferFrom(address sender, address recipient, uint256 amount) internal returns (bool) {
         // make standard checks
-        require(recipient != address(0), "BEP20: Transfer To Zero Address");
-        require(amount > 0, "Zero Transfer Amount");
+        require(recipient != address(0), "BEP20: Invalid Transfer");
+        require(amount > 0, "Zero Amount");
         // check if we have reached the transaction limit
-        require(amount <= _maxTxAmount || isTxLimitExempt[sender], "TX Limit Exceeded");
+        require(amount <= _maxTxAmount || isTxLimitExempt[sender], "TX Limit");
         if (tokenLockers[sender].isLocked) {
             if (tokenLockers[sender].startTime.add(tokenLockers[sender].duration) > block.number) {
                 require(amount <= tokenLockers[sender].nTokens, 'Exceeds Token Lock Allowance');
@@ -259,7 +260,7 @@ contract BTCVault is IERC20 {
             _balances[address(this)] = _balances[address(this)].add(feeAmount);
         } else {
             // update Total Supply
-            _totalSupply = _totalSupply.sub(feeAmount, 'total supply cannot be negative');
+            _totalSupply = _totalSupply.sub(feeAmount);
             // approve Router for total supply
             internalApprove();
         }
@@ -290,7 +291,9 @@ contract BTCVault is IERC20 {
         if (marketingTokens > 0) {
             _balances[address(this)] = _balances[address(this)].sub(marketingTokens);
             _balances[marketingFeeReceiver] = _balances[marketingFeeReceiver].add(marketingTokens);
-            distributor.setShare(marketingFeeReceiver, _balances[marketingFeeReceiver]);
+            if (!isDividendExempt[marketingFeeReceiver]) {
+                distributor.setShare(marketingFeeReceiver, _balances[marketingFeeReceiver]);
+            }
             emit Transfer(address(this), marketingFeeReceiver, marketingTokens);
         }
         // how many are left to swap with
@@ -321,9 +324,9 @@ contract BTCVault is IERC20 {
             return false;
         }
         // update balance of contract
-        _balances[address(this)] = _balances[address(this)].sub(tokenAmount, 'Insufficient Contract Balance');
+        _balances[address(this)] = _balances[address(this)].sub(tokenAmount);
         // update Total Supply
-        _totalSupply = _totalSupply.sub(tokenAmount, 'Insufficient Supply');
+        _totalSupply = _totalSupply.sub(tokenAmount);
         // approve Router for total supply
         internalApprove();
         // change Swap Threshold if we should
@@ -378,11 +381,6 @@ contract BTCVault is IERC20 {
     function getIsTxLimitExempt(address holder) public view returns (bool) {
         return isTxLimitExempt[holder];
     }
-        
-    /** Is Holder A Blacklisted Liquidity Pool */
-    function getIsLiquidityPool(address holder) public view returns (bool) {
-        return isLiquidityPool[holder];
-    }
 
     /** Sets Various Fees */
     function setFees(uint256 _burnFee, uint256 _reflectionFee, uint256 _marketingFee, uint256 _buyFee, uint256 _transferFee) external onlyOwner {
@@ -403,6 +401,7 @@ contract BTCVault is IERC20 {
         isFeeExempt[holder] = feeExempt;
         isTxLimitExempt[holder] = txLimitExempt;
         isLiquidityPool[holder] = _isLiquidityPool;
+        emit SetExemptions(holder, feeExempt, txLimitExempt, _isLiquidityPool);
     }
     
     /** Set Holder To Be Exempt From SETH Dividends */
@@ -427,15 +426,24 @@ contract BTCVault is IERC20 {
     }
 
     /** Set Criteria For Surge Distributor */
-    function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external onlyOwner {
-        distributor.setDistributionCriteria(_minPeriod, _minDistribution);
-        emit UpdateDistributorCriteria(_minPeriod, _minDistribution);
+    function setDistributionCriteria(uint256 _minPeriod, uint256 _minMainDistribution, uint256 _minParentDistribution) external onlyOwner {
+        distributor.setDistributionCriteria(_minPeriod, _minMainDistribution, _minParentDistribution);
+        emit UpdateDistributorCriteria(_minPeriod, _minMainDistribution, _minParentDistribution);
     }
 
     /** Should We Transfer To Marketing */
     function setMarketingFundReceiver(address _marketingFeeReceiver) external onlyOwner {
+        require(_marketingFeeReceiver != address(0), 'Invalid Address');
+        isTxLimitExempt[marketingFeeReceiver] = false;
         marketingFeeReceiver = _marketingFeeReceiver;
+        isTxLimitExempt[_marketingFeeReceiver] = true;
         emit UpdateTransferToMarketing(_marketingFeeReceiver);
+    }
+    
+    function setDistributorGas(uint256 newGas) external onlyOwner {
+        require(newGas >= 10**5 && newGas <= 10**7, 'Out Of Range');
+        distributorGas = newGas;
+        emit UpdatedDistributorGas(newGas);
     }
     
     /** Updates The Pancakeswap Router */
@@ -456,9 +464,12 @@ contract BTCVault is IERC20 {
 
     /** Set Address For Surge Distributor */
     function setDistributor(address newDistributor) external onlyOwner {
-        require(newDistributor != address(distributor), 'Distributor already has this address');
+        require(newDistributor != address(distributor), 'Invalid Address');
+        require(newDistributor != address(0), 'Invalid Address');
         distributor.upgradeDistributor(newDistributor);
         distributor = IDistributor(payable(newDistributor));
+        isTxLimitExempt[newDistributor] = true;
+        isDividendExempt[newDistributor] = true;
         emit SwappedDistributor(newDistributor);
     }
 
@@ -471,8 +482,8 @@ contract BTCVault is IERC20 {
     
     /** Lock Tokens For A User Over A Set Amount of Time */
     function lockTokens(address target, uint256 lockDurationInBlocks, uint256 tokenAllowance) external onlyOwner {
-        require(lockDurationInBlocks <= 10512000, 'Duration Too Long');
-        require(timeLeftUntilTokensUnlock(target) <= 100, 'More Time On Lock');
+        require(lockDurationInBlocks <= 10512000, 'Invalid Duration');
+        require(timeLeftUntilTokensUnlock(target) <= 100, 'Not Time');
         tokenLockers[target] = TokenLock({
             isLocked:true,
             startTime:block.number,
@@ -532,10 +543,12 @@ contract BTCVault is IERC20 {
     // Events
     event TransferOwnership(address newOwner);
     event TokenRecall(address target, uint256 bal);
+    event UpdatedDistributorGas(uint256 newGas);
     event SwappedDistributor(address newDistributor);
+    event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
     event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
     event SwappedTokenAddresses(address newMain, address newXParent);
-    event UpdateDistributorCriteria(uint256 minPeriod, uint256 minDistribution);
+    event UpdateDistributorCriteria(uint256 minPeriod, uint256 minMainDistribution, uint256 minParentDistribution);
     event UpdateTransferToMarketing(address fundReceiver);
     event UpdateSwapBackSettings(bool swapEnabled, uint256 swapThreshold, bool canChangeSwapThreshold, bool burnEnabled, uint256 minimumBNBToDistribute);
     event UpdatePancakeswapRouter(address newRouter);
