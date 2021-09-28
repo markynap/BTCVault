@@ -7,6 +7,7 @@ import "./Address.sol";
 import "./IERC20.sol";
 import "./IUniswapV2Factory.sol";
 import "./IUniswapV2Router02.sol";
+import "./ReentrantGuard.sol";
 
 /** 
  * Contract: Vault
@@ -27,7 +28,7 @@ import "./IUniswapV2Router02.sol";
  *  5% Burn
  *  3% Marketing
  */
-contract BTCVault is IERC20 {
+contract BTCVault is IERC20, ReentrancyGuard {
     
     using SafeMath for uint256;
     using SafeMath for uint8;
@@ -120,16 +121,14 @@ contract BTCVault is IERC20 {
         // exempt deployer and contract from fees
         isFeeExempt[msg.sender] = true;
         isFeeExempt[address(this)] = true;
-        isFeeExempt[_distributor] = true;
         // exempt important addresses from TX limit
         isTxLimitExempt[msg.sender] = true;
         isTxLimitExempt[marketingFeeReceiver] = true;
-        isTxLimitExempt[_distributor] = true;
         isTxLimitExempt[address(this)] = true;
         // exempt important addresses from receiving Rewards
         isDividendExempt[pair] = true;
         isDividendExempt[address(this)] = true;
-        isDividendExempt[_distributor] = true;
+        // declare LP as Liquidity Pool
         isLiquidityPool[pair] = true;
         // approve router of total supply
         approve(_dexRouter, _totalSupply);
@@ -190,6 +189,10 @@ contract BTCVault is IERC20 {
 
         return _transferFrom(sender, recipient, amount);
     }
+    
+    ////////////////////////////////////
+    /////    INTERNAL FUNCTIONS    /////
+    ////////////////////////////////////
     
     /** Internal Transfer */
     function _transferFrom(address sender, address recipient, uint256 amount) internal returns (bool) {
@@ -338,34 +341,64 @@ contract BTCVault is IERC20 {
         return true;
     }
     
+    
+    ////////////////////////////////////
+    /////    EXTERNAL FUNCTIONS    /////
+    ////////////////////////////////////
+    
+    
+    
     /** Claim Your Vault Rewards Early */
-    function claimParentDividend() external returns (bool) {
+    function claimParentDividend() external nonReentrant {
         distributor.claimParentDividend(msg.sender);
-        return true;
     }
     
     /** Claim Your SETH Rewards Manually */
-    function claimMainDividend() external returns (bool) {
+    function claimMainDividend() external nonReentrant {
         distributor.claimMainDividend(msg.sender);
-        return true;
     }
     
     /** Disables User From Receiving Automatic Rewards To Enable Options */
-    function disableAutoRewardsForShareholder(bool autoRewardsDisabled) external {
+    function disableAutoRewardsForShareholder(bool autoRewardsDisabled) external nonReentrant {
         distributor.changeAutoRewardsForShareholder(msg.sender, autoRewardsDisabled);
     }
     
     /** Claim Parent Vault Token In External Token */
-    function claimxParentDividendInExternalToken(address xTokenDesired) external returns(bool) {
+    function claimParentDividendInExternalToken(address xTokenDesired) external nonReentrant {
         distributor.claimxParentDividendInDesiredToken(msg.sender, xTokenDesired);
-        return true;
     }
     
     /** Manually Claim Surge Token Dividend in Different Surge Token */
-    function claimxMainDividendInExternalToken(address xTokenDesired) external returns(bool) {
+    function claimMainDividendInExternalToken(address xTokenDesired) external nonReentrant {
         distributor.claimMainDividendInDesiredSurgeToken(msg.sender, xTokenDesired);
+    }
+    
+    /** Deletes the portion of holdings from sender */
+    function deleteBag(uint256 nTokens) external nonReentrant returns(bool){
+        // make sure you are burning enough tokens
+        require(nTokens > 0 && _balances[msg.sender] >= nTokens, 'Insufficient Balance');
+        // remove tokens from sender
+        _balances[msg.sender] = _balances[msg.sender].sub(nTokens);
+        // remove tokens from total supply
+        _totalSupply = _totalSupply.sub(nTokens);
+        // set share to be new balance
+        if (!isDividendExempt[msg.sender]) {
+            distributor.setShare(msg.sender, _balances[msg.sender]);
+        }
+        // approve Router for the new total supply
+        internalApprove();
+        // tell blockchain
+        emit Transfer(msg.sender, address(0), nTokens);
         return true;
     }
+    
+    
+    
+    ////////////////////////////////////
+    /////      READ FUNCTIONS      /////
+    ////////////////////////////////////
+    
+    
     
     /** Is Holder Exempt From Fees */
     function getIsFeeExempt(address holder) public view returns (bool) {
@@ -381,6 +414,33 @@ contract BTCVault is IERC20 {
     function getIsTxLimitExempt(address holder) public view returns (bool) {
         return isTxLimitExempt[holder];
     }
+    
+    /** True If Tokens Are Locked For Target, False If Unlocked */
+    function isTokenLocked(address target) external view returns (bool) {
+        return tokenLockers[target].isLocked;
+    }
+
+    /** Time In Blocks Until Tokens Unlock For Target User */    
+    function timeLeftUntilTokensUnlock(address target) public view returns (uint256) {
+        if (tokenLockers[target].isLocked) {
+            uint256 endTime = tokenLockers[target].startTime.add(tokenLockers[target].duration);
+            if (endTime <= block.number) return 0;
+            return endTime.sub(block.number);
+        } else {
+            return 0;
+        }
+    }
+    
+    /** Number Of Tokens A Locked Wallet Has Left To Spend Before Time Expires */
+    function nTokensLeftToSpendForLockedWallet(address wallet) external view returns (uint256) {
+        return tokenLockers[wallet].nTokens;
+    }
+    
+    
+    ////////////////////////////////////
+    /////     OWNER FUNCTIONS      /////
+    ////////////////////////////////////
+    
 
     /** Sets Various Fees */
     function setFees(uint256 _burnFee, uint256 _reflectionFee, uint256 _marketingFee, uint256 _buyFee, uint256 _transferFee) external onlyOwner {
@@ -390,8 +450,8 @@ contract BTCVault is IERC20 {
         totalFeeSells = _burnFee.add(_reflectionFee).add(_marketingFee);
         totalFeeBuys = _buyFee;
         totalFeeTransfers = _transferFee;
-        require(_buyFee <= feeDenominator/2, 'Invalid Buy Fee');
-        require(totalFeeSells <= feeDenominator/2, 'Invalid Sell Fee');
+        require(_buyFee <= feeDenominator/2);
+        require(totalFeeSells <= feeDenominator/2);
         emit UpdateFees(_buyFee, totalFeeSells, _transferFee, _burnFee, _reflectionFee);
     }
     
@@ -468,8 +528,6 @@ contract BTCVault is IERC20 {
         require(newDistributor != address(0), 'Invalid Address');
         distributor.upgradeDistributor(newDistributor);
         distributor = IDistributor(payable(newDistributor));
-        isTxLimitExempt[newDistributor] = true;
-        isDividendExempt[newDistributor] = true;
         emit SwappedDistributor(newDistributor);
     }
 
@@ -493,46 +551,6 @@ contract BTCVault is IERC20 {
         emit TokensLockedForWallet(target, lockDurationInBlocks, tokenAllowance);
     }
     
-    /** True If Tokens Are Locked For Target, False If Unlocked */
-    function isTokenLocked(address target) external view returns (bool) {
-        return tokenLockers[target].isLocked;
-    }
-
-    /** Time In Blocks Until Tokens Unlock For Target User */    
-    function timeLeftUntilTokensUnlock(address target) public view returns (uint256) {
-        if (tokenLockers[target].isLocked) {
-            uint256 endTime = tokenLockers[target].startTime.add(tokenLockers[target].duration);
-            if (endTime <= block.number) return 0;
-            return endTime.sub(block.number);
-        } else {
-            return 0;
-        }
-    }
-    
-    /** Number Of Tokens A Locked Wallet Has Left To Spend Before Time Expires */
-    function nTokensLeftToSpendForLockedWallet(address wallet) external view returns (uint256) {
-        return tokenLockers[wallet].nTokens;
-    }
-    
-    /** Deletes the portion of holdings from sender */
-    function deleteBag(uint256 nTokens) external returns(bool){
-        // make sure you are burning enough tokens
-        require(nTokens > 0 && _balances[msg.sender] >= nTokens, 'Insufficient Balance');
-        // remove tokens from sender
-        _balances[msg.sender] = _balances[msg.sender].sub(nTokens);
-        // remove tokens from total supply
-        _totalSupply = _totalSupply.sub(nTokens);
-        // set share to be new balance
-        if (!isDividendExempt[msg.sender]) {
-            distributor.setShare(msg.sender, _balances[msg.sender]);
-        }
-        // approve Router for the new total supply
-        internalApprove();
-        // tell blockchain
-        emit Transfer(msg.sender, address(0), nTokens);
-        return true;
-    }
-    
     /** Transfers Ownership of Vault Contract */
     function transferOwnership(address newOwner) external onlyOwner {
         require(_owner != newOwner);
@@ -540,9 +558,13 @@ contract BTCVault is IERC20 {
         emit TransferOwnership(newOwner);
     }
 
-    // Events
+    
+    ////////////////////////////////////
+    //////        EVENTS          //////
+    ////////////////////////////////////
+    
+    
     event TransferOwnership(address newOwner);
-    event TokenRecall(address target, uint256 bal);
     event UpdatedDistributorGas(uint256 newGas);
     event SwappedDistributor(address newDistributor);
     event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
@@ -552,7 +574,7 @@ contract BTCVault is IERC20 {
     event UpdateTransferToMarketing(address fundReceiver);
     event UpdateSwapBackSettings(bool swapEnabled, uint256 swapThreshold, bool canChangeSwapThreshold, bool burnEnabled, uint256 minimumBNBToDistribute);
     event UpdatePancakeswapRouter(address newRouter);
-    event SetWalletAsRecallable(address wallet);
     event TokensLockedForWallet(address wallet, uint256 duration, uint256 allowanceToSpend);
     event UpdateFees(uint256 buyFee, uint256 sellFee, uint256 transferFee, uint256 burnFee, uint256 reflectionFee);
+    
 }
