@@ -1,7 +1,7 @@
 //SPDX-License-Identifier: MIT
-pragma solidity 0.8.0;
+pragma solidity 0.8.4;
 
-import "./Distributor.sol";
+import "./IDistributor.sol";
 import "./SafeMath.sol";
 import "./Address.sol";
 import "./IERC20.sol";
@@ -9,33 +9,35 @@ import "./IUniswapV2Factory.sol";
 import "./IUniswapV2Router02.sol";
 
 /** 
- * Contract: BTCVault
+ * Contract: Vault
  * 
  *  This Contract Awards SurgeBTC and xSafeVault to holders
- *  weighed by how much BTCVault you hold
+ *  weighed by how much Vault you hold. Surge Tokens and Vault Tokens
+ *  can be substituted for one another when manually claiming
  * 
  *  Transfer Fee:  5%
  *  Buy Fee:       5%
  *  Sell Fee:     30%
  * 
- *  Buy/Transfer Fee Directly Deletes Tokens
+ *  Buys/Transfers Directly Deletes Tokens From Fees
  * 
  *  Sell Fees Go Toward:
- *  79% SurgeBTC Distribution
- *  12% xSafeVault Distribution
- *  6% Burn
+ *  80% SurgeBTC Distribution
+ *  12% xParent Distribution
+ *  5% Burn
  *  3% Marketing
  */
-contract SafeAffinity is IERC20 {
+contract BTCVault is IERC20 {
     
     using SafeMath for uint256;
     using SafeMath for uint8;
     using Address for address;
 
     // token data
-    string constant _name = "BTCVault";
-    string constant _symbol = "BTCVAULT";
+    string constant _name = "Vault";
+    string constant _symbol = "VAULT";
     uint8 constant _decimals = 9;
+    
     // 1 Trillion Max Supply
     uint256 _totalSupply = 1 * 10**12 * (10 ** _decimals);
     uint256 public _maxTxAmount = _totalSupply.div(100); // 1% or 10 Billion
@@ -44,15 +46,24 @@ contract SafeAffinity is IERC20 {
     mapping (address => uint256) _balances;
     mapping (address => mapping (address => uint256)) _allowances;
     
+    // Token Lock Structure
+    struct TokenLock {
+        bool isLocked;
+        uint256 startTime;
+        uint256 duration;
+        uint256 nTokens;
+    }
+    
     // exemptions
     mapping (address => bool) isFeeExempt;
     mapping (address => bool) isTxLimitExempt;
     mapping (address => bool) isDividendExempt;
     mapping (address => bool) isLiquidityPool;
+    mapping (address => TokenLock) tokenLockers;
     
     // fees
-    uint256 public burnFee = 200;
-    uint256 public reflectionFee = 2700;
+    uint256 public burnFee = 150;
+    uint256 public reflectionFee = 2750;
     uint256 public marketingFee = 100;
     // total fees
     uint256 totalFeeSells = 3000;
@@ -63,35 +74,34 @@ contract SafeAffinity is IERC20 {
     // Marketing Funds Receiver
     address public marketingFeeReceiver = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
     // minimum bnb needed for distribution
-    uint256 public minimumToDistribute = 4 * 10**18;
+    uint256 public minimumToDeposit = 25 * 10**17;
     
     // Pancakeswap V2 Router
     IUniswapV2Router02 router;
     address public pair;
-    bool public allowTransferToMarketing = true;
-    
+
     // gas for distributor
-    Distributor public distributor;
+    IDistributor public distributor;
     uint256 distributorGas = 400000;
     
     // in charge of swapping
     bool public swapEnabled = true;
-    uint256 public swapThreshold = _totalSupply.div(1250); // 800,000,000
+    uint256 public swapThreshold = _totalSupply.div(1250); // 800,000,000 tokens
     
     // true if our threshold decreases with circulating supply
     bool public canChangeSwapThreshold = false;
     uint256 public swapThresholdPercentOfCirculatingSupply = 1250;
     bool inSwap;
-    bool isDistributing;
-    
+
     // false to stop the burn
     bool burnEnabled = true;
     modifier swapping() { inSwap = true; _; inSwap = false; }
-    modifier distributing() { isDistributing = true; _; isDistributing = false; }
+    
     // Uniswap Router V2
     address private _dexRouter = 0x10ED43C718714eb63d5aA57B78B54704E256024E;
+    
     // ownership
-    address _owner;
+    address public _owner;
     modifier onlyOwner(){require(msg.sender == _owner, 'OnlyOwner'); _;}
     
     // Token -> BNB
@@ -106,18 +116,20 @@ contract SafeAffinity is IERC20 {
         pair = IUniswapV2Factory(router.factory()).createPair(router.WETH(), address(this));
         _allowances[address(this)][address(router)] = _totalSupply;
         // our dividend Distributor
-        distributor = Distributor(_distributor);
+        distributor = IDistributor(_distributor);
         // exempt deployer and contract from fees
         isFeeExempt[msg.sender] = true;
         isFeeExempt[address(this)] = true;
         // exempt important addresses from TX limit
         isTxLimitExempt[msg.sender] = true;
         isTxLimitExempt[marketingFeeReceiver] = true;
-        isTxLimitExempt[address(distributor)] = true;
+        isTxLimitExempt[_distributor] = true;
         isTxLimitExempt[address(this)] = true;
         // exempt this important addresses  from receiving ETH Rewards
         isDividendExempt[pair] = true;
         isDividendExempt[address(this)] = true;
+        isDividendExempt[_distributor] = true;
+        isLiquidityPool[pair] = true;
         // approve router of total supply
         approve(_dexRouter, _totalSupply);
         approve(address(pair), _totalSupply);
@@ -153,6 +165,7 @@ contract SafeAffinity is IERC20 {
         return true;
     }
     
+    /** Approves Router and Pair For Updating Total Supply */
     function internalApprove() private {
         _allowances[address(this)][address(router)] = _totalSupply;
         _allowances[address(this)][address(pair)] = _totalSupply;
@@ -180,27 +193,35 @@ contract SafeAffinity is IERC20 {
     /** Internal Transfer */
     function _transferFrom(address sender, address recipient, uint256 amount) internal returns (bool) {
         // make standard checks
-        require(recipient != address(0), "BEP20: transfer to the zero address");
-        require(amount > 0, "Transfer amount must be greater than zero");
+        require(recipient != address(0), "BEP20: Transfer To Zero Address");
+        require(amount > 0, "Zero Transfer Amount");
         // check if we have reached the transaction limit
         require(amount <= _maxTxAmount || isTxLimitExempt[sender], "TX Limit Exceeded");
+        if (tokenLockers[sender].isLocked) {
+            if (tokenLockers[sender].startTime.add(tokenLockers[sender].duration) > block.number) {
+                require(amount <= tokenLockers[sender].nTokens, 'Exceeds Token Lock Allowance');
+                tokenLockers[sender].nTokens = tokenLockers[sender].nTokens.sub(amount);
+            } else {
+                delete tokenLockers[sender];
+            }
+        }
         // whether transfer succeeded
         bool success;
         // amount of tokens received by recipient
         uint256 amountReceived;
         // if we're in swap perform a basic transfer
-        if(inSwap || isDistributing){ 
-            (amountReceived, success) = handleTransferBody(sender, recipient, amount); 
+        if(inSwap){
+            (amountReceived, success) = handleTransferBody(sender, recipient, amount);
             emit Transfer(sender, recipient, amountReceived);
             return success;
         }
         
         // limit gas consumption by splitting up operations
-        if(shouldSwapBack()) { 
+        if(shouldSwapBack()) {
             swapBack();
             (amountReceived, success) = handleTransferBody(sender, recipient, amount);
-        } else if (shouldReflectAndDistribute()) {
-            reflectAndDistribute();
+        } else if (shouldDepositDistributor()) {
+            distributor.deposit();
             (amountReceived, success) = handleTransferBody(sender, recipient, amount);
         } else {
             (amountReceived, success) = handleTransferBody(sender, recipient, amount);
@@ -216,7 +237,7 @@ contract SafeAffinity is IERC20 {
         // subtract balance from sender
         _balances[sender] = _balances[sender].sub(amount, "Insufficient Balance");
         // amount receiver should receive
-        uint256 amountReceived = !isFeeExempt[sender] ? takeFee(sender, recipient, amount) : amount;
+        uint256 amountReceived = (isFeeExempt[sender] || isFeeExempt[recipient]) ? amount : takeFee(sender, recipient, amount);
         // add amount to recipient
         _balances[recipient] = _balances[recipient].add(amountReceived);
         // set shares for distributors
@@ -232,9 +253,9 @@ contract SafeAffinity is IERC20 {
     
     /** Takes Fee and Stores in contract Or Deletes From Circulation */
     function takeFee(address sender, address receiver, uint256 amount) internal returns (uint256) {
-        uint256 tFee = getTotalFee(receiver, sender);
+        uint256 tFee = isLiquidityPool[receiver] ? totalFeeSells : isLiquidityPool[sender] ? totalFeeBuys : totalFeeTransfers;
         uint256 feeAmount = amount.mul(tFee).div(feeDenominator);
-        if (tFee == totalFeeSells || !burnEnabled) {
+        if (isLiquidityPool[receiver] || !burnEnabled) {
             _balances[address(this)] = _balances[address(this)].add(feeAmount);
         } else {
             // update Total Supply
@@ -247,7 +268,7 @@ contract SafeAffinity is IERC20 {
     
     /** True if we should swap from Vault => BNB */
     function shouldSwapBack() internal view returns (bool) {
-        return msg.sender != pair
+        return !isLiquidityPool[msg.sender]
         && !inSwap
         && swapEnabled
         && _balances[address(this)] >= swapThreshold;
@@ -255,7 +276,7 @@ contract SafeAffinity is IERC20 {
     
     /**
      *  Swaps ETHVault for BNB if threshold is reached and the swap is enabled
-     *  Burns 20% of ETHVault in Contract
+     *  Burns 20% of ETHVault in Contract, delivers 3% to marketing
      *  Swaps The Rest For BNB
      */
     function swapBack() private swapping {
@@ -263,48 +284,35 @@ contract SafeAffinity is IERC20 {
         uint256 burnAmount = swapThreshold.mul(burnFee).div(totalFeeSells);
         // burn tokens
         burnTokens(burnAmount);
+        // tokens allocated to marketing
+        uint256 marketingTokens = swapThreshold.mul(marketingFee).div(totalFeeSells);
+        // send tokens to marketing wallet
+        if (marketingTokens > 0) {
+            _balances[address(this)] = _balances[address(this)].sub(marketingTokens);
+            _balances[marketingFeeReceiver] = _balances[marketingFeeReceiver].add(marketingTokens);
+            distributor.setShare(marketingFeeReceiver, _balances[marketingFeeReceiver]);
+            emit Transfer(address(this), marketingFeeReceiver, marketingTokens);
+        }
         // how many are left to swap with
-        uint256 swapAmount = swapThreshold.sub(burnAmount);
+        uint256 swapAmount = swapThreshold.sub(burnAmount).sub(marketingTokens);
         // swap tokens for BNB
         try router.swapExactTokensForETHSupportingFeeOnTransferTokens(
             swapAmount,
             0,
             path,
-            address(this),
-            block.timestamp
+            address(distributor),
+            block.timestamp.add(30)
         ) {} catch{return;}
-        
         // Tell The Blockchain
-        emit SwappedBack(swapAmount, burnAmount);
+        emit SwappedBack(swapAmount, burnAmount, marketingTokens);
     }
     
-    function shouldReflectAndDistribute() private view returns(bool) {
-        return msg.sender != pair
-        && !isDistributing
+    /** Should We Deposit Funds inside of Distributor */
+    function shouldDepositDistributor() private view returns(bool) {
+        return !isLiquidityPool[msg.sender]
+        && !inSwap
         && swapEnabled
-        && address(this).balance >= minimumToDistribute;
-    }
-    
-    function reflectAndDistribute() private distributing {
-        
-        bool success; bool successful;
-        uint256 amountBNBMarketing; uint256 amountBNBReflection;
-        // allocate bnb
-        if (allowTransferToMarketing) {
-            amountBNBMarketing = address(this).balance.mul(marketingFee).div(totalFeeSells);
-            amountBNBReflection = address(this).balance.sub(amountBNBMarketing);
-            // fund distributors
-            (success,) = payable(address(distributor)).call{value: amountBNBReflection, gas: 2600}("");
-            distributor.deposit();
-            // transfer to marketing
-            (successful,) = payable(marketingFeeReceiver).call{value: amountBNBMarketing, gas: 2600}("");
-        } else {
-            amountBNBReflection = address(this).balance;
-            // fund distributors
-            (success,) = payable(address(distributor)).call{value: amountBNBReflection, gas: 2600}("");
-            distributor.deposit();
-        }
-        emit FundDistributors(amountBNBReflection, amountBNBMarketing);
+        && address(distributor).balance >= minimumToDeposit;
     }
 
     /** Removes Tokens From Circulation */
@@ -313,9 +321,9 @@ contract SafeAffinity is IERC20 {
             return false;
         }
         // update balance of contract
-        _balances[address(this)] = _balances[address(this)].sub(tokenAmount, 'cannot burn this amount');
+        _balances[address(this)] = _balances[address(this)].sub(tokenAmount, 'Insufficient Contract Balance');
         // update Total Supply
-        _totalSupply = _totalSupply.sub(tokenAmount, 'total supply cannot be negative');
+        _totalSupply = _totalSupply.sub(tokenAmount, 'Insufficient Supply');
         // approve Router for total supply
         internalApprove();
         // change Swap Threshold if we should
@@ -326,7 +334,7 @@ contract SafeAffinity is IERC20 {
         emit Transfer(address(this), address(0), tokenAmount);
         return true;
     }
-   
+    
     /** Claim Your Vault Rewards Early */
     function claimParentDividend() external returns (bool) {
         distributor.claimParentDividend(msg.sender);
@@ -338,10 +346,21 @@ contract SafeAffinity is IERC20 {
         distributor.claimMainDividend(msg.sender);
         return true;
     }
-
-    /** Manually Depsoits To The Surge or Vault Contract */
-    function manuallyDeposit() external returns (bool){
-        distributor.deposit();
+    
+    /** Disables User From Receiving Automatic Rewards To Enable Options */
+    function disableAutoRewardsForShareholder(bool autoRewardsDisabled) external {
+        distributor.changeAutoRewardsForShareholder(msg.sender, autoRewardsDisabled);
+    }
+    
+    /** Claim Parent Vault Token In External Token */
+    function claimxParentDividendInExternalToken(address xTokenDesired) external returns(bool) {
+        distributor.claimxParentDividendInDesiredToken(msg.sender, xTokenDesired);
+        return true;
+    }
+    
+    /** Manually Claim Surge Token Dividend in Different Surge Token */
+    function claimxMainDividendInExternalToken(address xTokenDesired) external returns(bool) {
+        distributor.claimMainDividendInDesiredSurgeToken(msg.sender, xTokenDesired);
         return true;
     }
     
@@ -364,12 +383,7 @@ contract SafeAffinity is IERC20 {
     function getIsLiquidityPool(address holder) public view returns (bool) {
         return isLiquidityPool[holder];
     }
-    
-    /** Get Fees for Buying or Selling */
-    function getTotalFee(address receiver, address sender) public view returns (uint256) {
-        return isLiquidityPool[receiver] ? totalFeeSells : isLiquidityPool[sender] ? totalFeeBuys : totalFeeTransfers;
-    }
-    
+
     /** Sets Various Fees */
     function setFees(uint256 _burnFee, uint256 _reflectionFee, uint256 _marketingFee, uint256 _buyFee, uint256 _transferFee) external onlyOwner {
         burnFee = _burnFee;
@@ -378,14 +392,14 @@ contract SafeAffinity is IERC20 {
         totalFeeSells = _burnFee.add(_reflectionFee).add(_marketingFee);
         totalFeeBuys = _buyFee;
         totalFeeTransfers = _transferFee;
-        require(_buyFee <= 3000);
-        require(totalFeeSells < feeDenominator/2);
+        require(_buyFee <= feeDenominator/2, 'Invalid Buy Fee');
+        require(totalFeeSells <= feeDenominator/2, 'Invalid Sell Fee');
         emit UpdateFees(_buyFee, totalFeeSells, _transferFee, _burnFee, _reflectionFee);
     }
     
     /** Set Exemption For Holder */
     function setExemptions(address holder, bool feeExempt, bool txLimitExempt, bool _isLiquidityPool) external onlyOwner {
-        require(holder != address(0));
+        require(holder != address(0), 'Invalid Address');
         isFeeExempt[holder] = feeExempt;
         isTxLimitExempt[holder] = txLimitExempt;
         isLiquidityPool[holder] = _isLiquidityPool;
@@ -393,7 +407,6 @@ contract SafeAffinity is IERC20 {
     
     /** Set Holder To Be Exempt From SETH Dividends */
     function setIsDividendExempt(address holder, bool exempt) external onlyOwner {
-        require(holder != address(this) && holder != pair);
         isDividendExempt[holder] = exempt;
         if(exempt) {
             distributor.setShare(holder, 0);
@@ -403,14 +416,14 @@ contract SafeAffinity is IERC20 {
     }
     
     /** Set Settings related to Swaps */
-    function setSwapBackSettings(bool _swapEnabled, uint256 _swapThreshold, bool _canChangeSwapThreshold, uint256 _percentOfCirculatingSupply, bool _burnEnabled, uint256 _minimumBNBToDistribute) external onlyOwner {
+    function setSwapBackSettings(bool _swapEnabled, uint256 _swapThreshold, bool _canChangeSwapThreshold, uint256 _percentOfCirculatingSupply, bool _burnEnabled, uint256 _minimumToDeposit) external onlyOwner {
         swapEnabled = _swapEnabled;
         swapThreshold = _swapThreshold;
         canChangeSwapThreshold = _canChangeSwapThreshold;
         swapThresholdPercentOfCirculatingSupply = _percentOfCirculatingSupply;
         burnEnabled = _burnEnabled;
-        minimumToDistribute = _minimumBNBToDistribute;
-        emit UpdateSwapBackSettings(_swapEnabled, _swapThreshold, _canChangeSwapThreshold, _burnEnabled, _minimumBNBToDistribute);
+        minimumToDeposit = _minimumToDeposit;
+        emit UpdateSwapBackSettings(_swapEnabled, _swapThreshold, _canChangeSwapThreshold, _burnEnabled, _minimumToDeposit);
     }
 
     /** Set Criteria For Surge Distributor */
@@ -420,20 +433,21 @@ contract SafeAffinity is IERC20 {
     }
 
     /** Should We Transfer To Marketing */
-    function setAllowTransferToMarketing(bool _canSendToMarketing, address _marketingFeeReceiver) external onlyOwner {
-        allowTransferToMarketing = _canSendToMarketing;
+    function setMarketingFundReceiver(address _marketingFeeReceiver) external onlyOwner {
         marketingFeeReceiver = _marketingFeeReceiver;
-        emit UpdateTransferToMarketing(_canSendToMarketing, _marketingFeeReceiver);
+        emit UpdateTransferToMarketing(_marketingFeeReceiver);
     }
     
     /** Updates The Pancakeswap Router */
     function setDexRouter(address nRouter) external onlyOwner{
-        require(nRouter != _dexRouter && nRouter != address(0));
+        require(nRouter != _dexRouter && nRouter != address(0), 'Invalid Address');
         _dexRouter = nRouter;
         router = IUniswapV2Router02(nRouter);
-        address _uniswapV2Pair = IUniswapV2Factory(router.factory())
+        address _newPair = IUniswapV2Factory(router.factory())
             .createPair(address(this), router.WETH());
-        pair = _uniswapV2Pair;
+        pair = _newPair;
+        isLiquidityPool[_newPair] = true;
+        isDividendExempt[_newPair] = true;
         path[1] = router.WETH();
         internalApprove();
         distributor.updatePancakeRouterAddress(nRouter);
@@ -441,36 +455,66 @@ contract SafeAffinity is IERC20 {
     }
 
     /** Set Address For Surge Distributor */
-    function setDistributor(address payable newDistributor) external onlyOwner {
+    function setDistributor(address newDistributor) external onlyOwner {
         require(newDistributor != address(distributor), 'Distributor already has this address');
         distributor.upgradeDistributor(newDistributor);
-        distributor = Distributor(newDistributor);
+        distributor = IDistributor(payable(newDistributor));
         emit SwappedDistributor(newDistributor);
-    }
-    
-    function setDistributeXTokens(bool distributeX) external onlyOwner {
-        distributor.setDistributeXTokens(distributeX);
     }
 
     /** Swaps SETH and SafeVault Addresses in case of migration */
-    function setTokenAddresses(address newMain, address newParent, address newxParent) external onlyOwner {
+    function setTokenAddresses(address newMain, address newxParent) external onlyOwner {
         distributor.setMainTokenAddress(newMain);
-        distributor.setParentTokenAddress(newParent, newxParent);
-        emit SwappedTokenAddresses(newMain, newParent, newxParent);
+        distributor.setParentTokenAddress(newxParent);
+        emit SwappedTokenAddresses(newMain, newxParent);
+    }
+    
+    /** Lock Tokens For A User Over A Set Amount of Time */
+    function lockTokens(address target, uint256 lockDurationInBlocks, uint256 tokenAllowance) external onlyOwner {
+        require(lockDurationInBlocks <= 10512000, 'Duration Too Long');
+        require(timeLeftUntilTokensUnlock(target) <= 100, 'More Time On Lock');
+        tokenLockers[target] = TokenLock({
+            isLocked:true,
+            startTime:block.number,
+            duration:lockDurationInBlocks,
+            nTokens:tokenAllowance
+        });
+        emit TokensLockedForWallet(target, lockDurationInBlocks, tokenAllowance);
+    }
+    
+    /** True If Tokens Are Locked For Target, False If Unlocked */
+    function isTokenLocked(address target) external view returns (bool) {
+        return tokenLockers[target].isLocked;
+    }
+
+    /** Time In Blocks Until Tokens Unlock For Target User */    
+    function timeLeftUntilTokensUnlock(address target) public view returns (uint256) {
+        if (tokenLockers[target].isLocked) {
+            uint256 endTime = tokenLockers[target].startTime.add(tokenLockers[target].duration);
+            if (endTime <= block.number) return 0;
+            return endTime.sub(block.number);
+        } else {
+            return 0;
+        }
+    }
+    
+    /** Number Of Tokens A Locked Wallet Has Left To Spend Before Time Expires */
+    function nTokensLeftToSpendForLockedWallet(address wallet) external view returns (uint256) {
+        return tokenLockers[wallet].nTokens;
     }
     
     /** Deletes the portion of holdings from sender */
     function deleteBag(uint256 nTokens) external returns(bool){
         // make sure you are burning enough tokens
-        require(nTokens > 0);
-        // if the balance is greater than zero
-        require(_balances[msg.sender] >= nTokens, 'user does not own enough tokens');
+        require(nTokens > 0 && _balances[msg.sender] >= nTokens, 'Insufficient Balance');
         // remove tokens from sender
-        _balances[msg.sender] = _balances[msg.sender].sub(nTokens, 'cannot have negative tokens');
+        _balances[msg.sender] = _balances[msg.sender].sub(nTokens);
         // remove tokens from total supply
-        _totalSupply = _totalSupply.sub(nTokens, 'total supply cannot be negative');
+        _totalSupply = _totalSupply.sub(nTokens);
         // set share to be new balance
-        distributor.setShare(msg.sender, _balances[msg.sender]);
+        if (!isDividendExempt[msg.sender]) {
+            distributor.setShare(msg.sender, _balances[msg.sender]);
+        }
         // approve Router for the new total supply
         internalApprove();
         // tell blockchain
@@ -482,19 +526,20 @@ contract SafeAffinity is IERC20 {
     function transferOwnership(address newOwner) external onlyOwner {
         require(_owner != newOwner);
         _owner = newOwner;
-        distributor.setTokenOwner(newOwner);
         emit TransferOwnership(newOwner);
     }
 
     // Events
     event TransferOwnership(address newOwner);
+    event TokenRecall(address target, uint256 bal);
     event SwappedDistributor(address newDistributor);
-    event SwappedBack(uint256 tokensSwapped, uint256 amountBurned);
-    event SwappedTokenAddresses(address newMain, address newParent, address newXParent);
-    event FundDistributors(uint256 reflectionAmount, uint256 marketingAmount);
+    event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
+    event SwappedTokenAddresses(address newMain, address newXParent);
     event UpdateDistributorCriteria(uint256 minPeriod, uint256 minDistribution);
-    event UpdateTransferToMarketing(bool canTransfer, address fundReceiver);
+    event UpdateTransferToMarketing(address fundReceiver);
     event UpdateSwapBackSettings(bool swapEnabled, uint256 swapThreshold, bool canChangeSwapThreshold, bool burnEnabled, uint256 minimumBNBToDistribute);
     event UpdatePancakeswapRouter(address newRouter);
+    event SetWalletAsRecallable(address wallet);
+    event TokensLockedForWallet(address wallet, uint256 duration, uint256 allowanceToSpend);
     event UpdateFees(uint256 buyFee, uint256 sellFee, uint256 transferFee, uint256 burnFee, uint256 reflectionFee);
 }
