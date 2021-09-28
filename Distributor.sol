@@ -69,6 +69,9 @@ contract Distributor is IDistributor, ReentrancyGuard {
     // auto rewards disabled
     mapping( address => bool ) autoRewardsDisabledForUser;
     
+    // approved tokens to swap between
+    mapping( address => bool ) approvedSwapToken;
+    
     modifier onlyToken() {
         require(msg.sender == _token); _;
     }
@@ -82,10 +85,19 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     function pairToken(address token) external {
         require(_token == address(0) && token != address(0), 'Token Already Paired');
-        require(msg.sender == tokenSetter, 'Token Owner Must Pair Distributor');
+        require(msg.sender == tokenSetter, 'Invalid Entry');
         _token = token;
-        tokenSetter = address(0);
         emit TokenPaired(token);
+    }
+    
+    function approveTokenForSwap(address token, bool isApproved) external {
+        require(msg.sender == tokenSetter, 'Invalid Entry');
+        approvedSwapToken[token] = isApproved;
+        emit ApproveTokenForSwapping(token, isApproved);
+    }
+    
+    function isTokenApprovedForSwapping(address token) external view returns (bool) {
+        return approvedSwapToken[token];
     }
 
     function setDistributionCriteria(uint256 _minPeriod, uint256 _minMainDistribution, uint256 _minParentDistribution) external override onlyToken {
@@ -254,7 +266,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     function claimxParentDividendInDesiredToken(address shareholder, address xTokenDesired) external override onlyToken nonReentrant{
         require(shareholderClaims[shareholder] + minAutoPeriod < block.number, 'Timeout');
-        require(xTokenDesired != router.WETH());
+        require(approvedSwapToken[xTokenDesired], 'xToken Not Approved For Swapping');
         require(shares[shareholder].amount > 0, 'Zero Balance');
         uint256 amount = getUnpaidParentEarnings(shareholder);
         require(amount > 0, 'Zero Amount Owed');
@@ -283,7 +295,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     function claimMainDividendInDesiredSurgeToken(address shareholder, address desiredMain) external override onlyToken nonReentrant{
         require(shareholderClaims[shareholder] + minAutoPeriod < block.number, 'Not Time Yet');
-        require(desiredMain != router.WETH());
+        require(approvedSwapToken[desiredMain], 'Surge Token Not Approved For Swapping');
         require(shares[shareholder].amount > 0, 'Zero Balance');
         uint256 amount = getUnpaidMainEarnings(shareholder);
         require(amount > 0, 'Zero Amount Owed');
@@ -402,6 +414,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
 
     // EVENTS 
     event TokenPaired(address pairedToken);
+    event ApproveTokenForSwapping(address token, bool isApproved);
 
     receive() external payable { }
 
