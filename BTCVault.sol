@@ -369,8 +369,8 @@ contract BTCVault is IERC20, ReentrancyGuard {
     }
     
     /** Manually Claim Surge Token Dividend in Different Surge Token */
-    function claimMainDividendInExternalToken(address xTokenDesired) external nonReentrant {
-        distributor.claimMainDividendInDesiredSurgeToken(msg.sender, xTokenDesired);
+    function claimMainDividendInExternalToken(address surgeTokenDesired) external nonReentrant {
+        distributor.claimMainDividendInDesiredSurgeToken(msg.sender, surgeTokenDesired);
     }
     
     /** Deletes the portion of holdings from sender */
