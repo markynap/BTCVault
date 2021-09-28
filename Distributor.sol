@@ -44,14 +44,16 @@ contract Distributor is IDistributor, ReentrancyGuard {
     uint256 public dividendsPerShareMain;
     uint256 public totalDividendsParent;
     uint256 public dividendsPerShareParent;
-    uint256 public dividendsPerShareAccuracyFactor = 10 ** 36;
+    uint256 constant dividendsPerShareAccuracyFactor = 10 ** 36;
     
     // blocks until next distribution
     uint256 public minPeriod = 1200;
-    // auto claim
-    uint256 public minAutoPeriod = 20;
-    // 20,000 Minimum Distribution
-    uint256 public minDistribution = 2 * 10**4;
+    // auto claim every 60 seconds if able
+    uint256 public constant minAutoPeriod = 20;
+    // 20,000 Minimum Distribution For Main
+    uint256 public minMainDistribution = 2 * 10**4;
+    // 20,000 Minimum Distribution For Parent
+    uint256 public minParentDistribution = 2 * 10**4 * 10**9;
     // current index in shareholder array 
     uint256 currentIndexMain;
     // current index in shareholder array 
@@ -86,9 +88,10 @@ contract Distributor is IDistributor, ReentrancyGuard {
         emit TokenPaired(token);
     }
 
-    function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external override onlyToken {
+    function setDistributionCriteria(uint256 _minPeriod, uint256 _minMainDistribution, uint256 _minParentDistribution) external override onlyToken {
         minPeriod = _minPeriod;
-        minDistribution = _minDistribution;
+        minMainDistribution = _minMainDistribution;
+        minParentDistribution = _minParentDistribution;
     }
 
     function setShare(address shareholder, uint256 amount) external override onlyToken {
@@ -190,13 +193,13 @@ contract Distributor is IDistributor, ReentrancyGuard {
     function shouldDistributeParent(address shareholder) internal view returns (bool) {
         return shareholderClaims[shareholder] + minPeriod < block.number
         && !autoRewardsDisabledForUser[shareholder]
-        && getUnpaidParentEarnings(shareholder) > minDistribution;
+        && getUnpaidParentEarnings(shareholder) >= minParentDistribution;
     }
     
     function shouldDistributeMain(address shareholder) internal view returns (bool) {
         return shareholderClaims[shareholder] + minPeriod < block.number
         && !autoRewardsDisabledForUser[shareholder]
-        && getUnpaidMainEarnings(shareholder) > minDistribution;
+        && getUnpaidMainEarnings(shareholder) >= minMainDistribution;
     }
 
     function distributeParentDividend(address shareholder) internal nonReentrant {
@@ -204,7 +207,6 @@ contract Distributor is IDistributor, ReentrancyGuard {
 
         uint256 amount = getUnpaidParentEarnings(shareholder);
         if(amount > 0){
-
             bool success = IERC20(xParent).transfer(shareholder, amount);
             if (success) {
                 shareholderClaims[shareholder] = block.number;
@@ -226,74 +228,86 @@ contract Distributor is IDistributor, ReentrancyGuard {
         }   
     }
     
-    function claimMainDividend(address claimer) external override onlyToken {
-        require(shareholderClaims[claimer] + minAutoPeriod < block.number, 'Timeout');
-        distributeMainDividend(claimer);
+    function claimMainDividend(address shareholder) external override onlyToken {
+        require(shareholderClaims[shareholder] + minAutoPeriod < block.number, 'Timeout');
+        require(shares[shareholder].amount > 0, 'Zero Balance');
+        uint256 amount = getUnpaidMainEarnings(shareholder);
+        require(amount > 0, 'Zero Amount Owed');
+        // update shareholder data
+        shareholderClaims[shareholder] = block.number;
+        shares[shareholder].totalExcludedMain = getCumulativeMainDividends(shares[shareholder].amount);
+        bool success = IERC20(main).transfer(shareholder, amount);
+        require(success, 'Failure On Main Transfer');
     }
     
-    function claimParentDividend(address claimer) external override onlyToken {
-        require(shareholderClaims[claimer] + minAutoPeriod < block.number, 'Timeout');
-        distributeParentDividend(claimer);
+    function claimParentDividend(address shareholder) external override onlyToken {
+        require(shareholderClaims[shareholder] + minAutoPeriod < block.number, 'Timeout');
+        require(shares[shareholder].amount > 0, 'Zero Balance');
+        uint256 amount = getUnpaidParentEarnings(shareholder);
+        require(amount > 0, 'Zero Amount Owed');
+        // update shareholder data
+        shareholderClaims[shareholder] = block.number;
+        shares[shareholder].totalExcludedParent = getCumulativeParentDividends(shares[shareholder].amount);
+        bool success = IERC20(xParent).transfer(shareholder, amount);
+        require(success, 'Failure On Parent Transfer');
     }
     
     function claimxParentDividendInDesiredToken(address shareholder, address xTokenDesired) external override onlyToken nonReentrant{
         require(shareholderClaims[shareholder] + minAutoPeriod < block.number, 'Timeout');
         require(xTokenDesired != router.WETH());
-        if(shares[shareholder].amount == 0){ return; }
-
+        require(shares[shareholder].amount > 0, 'Zero Balance');
         uint256 amount = getUnpaidParentEarnings(shareholder);
-        if(amount > 0){
+        require(amount > 0, 'Zero Amount Owed');
             
-            // update Shareholder information
-            shareholderClaims[shareholder] = block.number;
-            shares[shareholder].totalExcludedParent = getCumulativeParentDividends(shares[shareholder].amount);
+        // update Shareholder information
+        shareholderClaims[shareholder] = block.number;
+        shares[shareholder].totalExcludedParent = getCumulativeParentDividends(shares[shareholder].amount);
             
-            // Swap on PCS
-            address[] memory tokenPath = new address[](2);
-            tokenPath[0] = xParent;
-            tokenPath[1] = xTokenDesired;
+        // Swap on PCS
+        address[] memory tokenPath = new address[](2);
+        tokenPath[0] = xParent;
+        tokenPath[1] = xTokenDesired;
             
-            // approve transaction
-            IERC20(xParent).approve(address(router), amount);
+        // approve transaction
+        IERC20(xParent).approve(address(router), amount);
 
-            // Swap Token for Token
-            try router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-                amount,
-                0, // accept as many xTokens as we can
-                tokenPath,
-                shareholder, // Send To Shareholder
-                block.timestamp.add(30)
-            ) {} catch{revert('Failure On xToken For xToken Swap');}
-        }
+        // Swap Token for Token
+        try router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            amount,
+            0, // accept as many xTokens as we can
+            tokenPath,
+            shareholder, // Send To Shareholder
+            block.timestamp.add(30)
+        ) {} catch{revert('Failure On xToken Swap');}
     }
     
     function claimMainDividendInDesiredSurgeToken(address shareholder, address desiredMain) external override onlyToken nonReentrant{
         require(shareholderClaims[shareholder] + minAutoPeriod < block.number, 'Not Time Yet');
-        if(shares[shareholder].amount == 0){ return; }
-
+        require(desiredMain != router.WETH());
+        require(shares[shareholder].amount > 0, 'Zero Balance');
         uint256 amount = getUnpaidMainEarnings(shareholder);
-        if(amount > 0){
+        require(amount > 0, 'Zero Amount Owed');
             
-            // update Shareholder information
-            shareholderClaims[shareholder] = block.number;
-            shares[shareholder].totalExcludedMain = getCumulativeMainDividends(shares[shareholder].amount);
+        // update Shareholder information
+        shareholderClaims[shareholder] = block.number;
+        shares[shareholder].totalExcludedMain = getCumulativeMainDividends(shares[shareholder].amount);
             
-            // Swap on PCS
-            address[] memory mainPath = new address[](2);
-            mainPath[0] = main;
-            mainPath[1] = desiredMain;
+        // Swap on PCS
+        address[] memory mainPath = new address[](2);
+        mainPath[0] = main;
+        mainPath[1] = desiredMain;
             
-            // approve transaction
-            IERC20(main).approve(address(router), amount);
+        // approve transaction
+        IERC20(main).approve(address(router), amount);
             
-            try router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-                amount,
-                0,
-                mainPath,
-                shareholder,
-                block.timestamp.add(30)
-            ) {} catch{revert('Error on Surge Token Swap');}
-        }
+        try router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            amount,
+            0,
+            mainPath,
+            shareholder,
+            block.timestamp.add(30)
+        ) {} catch{revert('Error on Main Token Swap');}
+        
     }
     
     function getShareholders() external view returns (address[] memory) {
@@ -358,7 +372,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     /** New Parent Address */
     function setParentTokenAddress(address xParentToken) external override onlyToken {
-        require(xParent != xParentToken);
+        require(xParent != xParentToken && xParentToken != address(0), 'Invalid Input');
         uint256 xbal = IERC20(xParent).balanceOf(address(this));
         if (xbal > 0) {
             IERC20(xParent).transfer(xParent, xbal);
@@ -368,7 +382,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     /** New Main Address */
     function setMainTokenAddress(address newMainToken) external override onlyToken {
-        require(main != newMainToken);
+        require(main != newMainToken && newMainToken != address(0), 'Invalid Input');
         uint256 bal = IERC20(main).balanceOf(address(this));
         if (bal > 0) {
             IERC20(main).transfer(xParent, bal);
@@ -378,6 +392,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     /** Upgrades To New Distributor */
     function upgradeDistributor(address newDistributor) external override onlyToken {
+        require(newDistributor != address(this) && newDistributor != address(0), 'Invalid Input');
         uint256 mainBal = IERC20(main).balanceOf(address(this));
         if (mainBal > 0) IERC20(main).transfer(newDistributor, mainBal);
         uint256 xParentBal = IERC20(xParent).balanceOf(address(this));
