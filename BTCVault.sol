@@ -452,12 +452,13 @@ contract BTCVault is IERC20, ReentrancyGuard {
         totalFeeTransfers = _transferFee;
         require(_buyFee <= feeDenominator/2);
         require(totalFeeSells <= feeDenominator/2);
+        require(_transferFee <= feeDenominator/2);
         emit UpdateFees(_buyFee, totalFeeSells, _transferFee, _burnFee, _reflectionFee);
     }
     
     /** Set Exemption For Holder */
     function setExemptions(address holder, bool feeExempt, bool txLimitExempt, bool _isLiquidityPool) external onlyOwner {
-        require(holder != address(0), 'Invalid Address');
+        require(holder != address(0));
         isFeeExempt[holder] = feeExempt;
         isTxLimitExempt[holder] = txLimitExempt;
         isLiquidityPool[holder] = _isLiquidityPool;
