@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity 0.8.0;
+pragma solidity 0.8.4;
 
 interface IDistributor {
     function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external;
@@ -8,11 +8,11 @@ interface IDistributor {
     function process(uint256 gas) external;
     function upgradeDistributor(address newDistributor) external;
     function claimMainDividend(address sender) external;
-    function setDistributeXTokens(bool distributeX) external;
+    function claimxParentDividendInDesiredToken(address shareholder, address xTokenDesired) external;
+    function claimMainDividendInDesiredSurgeToken(address shareholder, address xMainTokenDesired) external;
+    function changeAutoRewardsForShareholder(address shareholder, bool rewardsDisabled) external;
     function claimParentDividend(address sender) external;
     function updatePancakeRouterAddress(address pcs) external;
-    function updateXTradeManager(address newManager) external;
-    function setMainTokenAddress(address main) external;
-    function setTokenOwner(address newOwner) external;
-    function setParentTokenAddress(address parent, address xParent) external;
+    function setMainTokenAddress(address newMainToken) external;
+    function setParentTokenAddress(address xParent) external;
 }
