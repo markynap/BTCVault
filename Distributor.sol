@@ -60,8 +60,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     uint256 currentIndexParent;
     
     // distribution turn
-    bool mainsTurnPurchase = false;
-    bool mainsTurnDistribute = true;
+    bool mainsTurnDistribute = false;
     
     // owner of token contract - used to pair with Vault Token
     address tokenSetter;
@@ -126,31 +125,32 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     function deposit() external override onlyToken {
         if (address(this).balance < 10**14) return;
+        
+        // Allocate BNB
+        uint256 parentAllocation = address(this).balance.div(8);
+        uint256 mainAllocation = address(this).balance.sub(parentAllocation);
+        
+        // Main balance before
+        uint256 mainBalanceBefore = IERC20(main).balanceOf(address(this));
+        // buy Main
+        (bool successMain,) = payable(main).call{value: mainAllocation}("");
+        // Main balance after
+        uint256 mainAmount = IERC20(main).balanceOf(address(this)).sub(mainBalanceBefore);
+        // update main dividends
+        totalDividendsMain = totalDividendsMain.add(mainAmount);
+        dividendsPerShareMain = dividendsPerShareMain.add(dividendsPerShareAccuracyFactor.mul(mainAmount).div(totalShares));
+        require(successMain, 'Failure On Main Purchase');
 
-        if (mainsTurnPurchase) {
-            // balance before
-            uint256 balanceBefore = IERC20(main).balanceOf(address(this));
-            // buy Main
-            (bool success,) = payable(main).call{value: address(this).balance}("");
-            // balance after
-            uint256 amount = IERC20(main).balanceOf(address(this)).sub(balanceBefore);
-            // update dividends
-            totalDividendsMain = totalDividendsMain.add(amount);
-            dividendsPerShareMain = dividendsPerShareMain.add(dividendsPerShareAccuracyFactor.mul(amount).div(totalShares));
-            require(success, 'Failure On Main Purchase');
-        } else {
-            // balance before
-            uint256 balanceBefore = IERC20(xParent).balanceOf(address(this));
-            // buy Main
-            (bool success,) = payable(xParent).call{value: address(this).balance.div(8)}("");
-            // balance after
-            uint256 amount = IERC20(xParent).balanceOf(address(this)).sub(balanceBefore);
-            // update dividends
-            totalDividendsParent = totalDividendsParent.add(amount);
-            dividendsPerShareParent = dividendsPerShareParent.add(dividendsPerShareAccuracyFactor.mul(amount).div(totalShares));
-            require(success, 'Failure On xParent Purchase');
-        }
-        mainsTurnPurchase = !mainsTurnPurchase;
+        // Parent balance before
+        uint256 parentBalanceBefore = IERC20(xParent).balanceOf(address(this));
+        // buy Parent
+        (bool successParent,) = payable(xParent).call{value: parentAllocation}("");
+        // Parent balance after
+        uint256 parentAmount = IERC20(xParent).balanceOf(address(this)).sub(parentBalanceBefore);
+        // update parent dividends
+        totalDividendsParent = totalDividendsParent.add(parentAmount);
+        dividendsPerShareParent = dividendsPerShareParent.add(dividendsPerShareAccuracyFactor.mul(parentAmount).div(totalShares));
+        require(successParent, 'Failure On xParent Purchase');
     }
 
     function process(uint256 gas) external override onlyToken {
