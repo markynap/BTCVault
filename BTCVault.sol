@@ -23,8 +23,8 @@ import "./ReentrantGuard.sol";
  *  Buys/Transfers Directly Deletes Tokens From Fees
  * 
  *  Sell Fees Go Toward:
- *  80% SurgeBTC Distribution
- *  12% xParent Distribution
+ *  80.5% SurgeBTC Distribution
+ *  11.5% SafeVault+ETHVault Buy+Burn
  *  5% Burn
  *  3% Marketing
  */
@@ -35,8 +35,8 @@ contract BTCVault is IERC20, ReentrancyGuard {
     using Address for address;
 
     // token data
-    string constant _name = "Vault";
-    string constant _symbol = "VAULT";
+    string _name = "Vault";
+    string _symbol = "VAULT";
     uint8 constant _decimals = 9;
     
     // 1 Trillion Max Supply
@@ -55,11 +55,17 @@ contract BTCVault is IERC20, ReentrancyGuard {
         uint256 nTokens;
     }
     
-    // exemptions
-    mapping (address => bool) isFeeExempt;
-    mapping (address => bool) isTxLimitExempt;
-    mapping (address => bool) isDividendExempt;
-    mapping (address => bool) public isLiquidityPool;
+    // permissions
+    struct Permissions {
+        bool isFeeExempt;
+        bool isTxLimitExempt;
+        bool isDividendExempt;
+        bool isLiquidityPool;
+    }
+    // user -> permissions
+    mapping (address => Permissions) permissions;
+    
+    // Token Lockers
     mapping (address => TokenLock) tokenLockers;
     
     // fees
@@ -74,6 +80,8 @@ contract BTCVault is IERC20, ReentrancyGuard {
     
     // Marketing Funds Receiver
     address public marketingFeeReceiver = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
+    // CA which buys/burns ETHVault+SafeVault
+    address public burner = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
     // minimum bnb needed for distribution
     uint256 public minimumToDeposit = 25 * 10**17;
     
@@ -119,17 +127,17 @@ contract BTCVault is IERC20, ReentrancyGuard {
         // our dividend Distributor
         distributor = IDistributor(_distributor);
         // exempt deployer and contract from fees
-        isFeeExempt[msg.sender] = true;
-        isFeeExempt[address(this)] = true;
+        permissions[msg.sender].isFeeExempt = true;
+        permissions[address(this)].isFeeExempt = true;
         // exempt important addresses from TX limit
-        isTxLimitExempt[msg.sender] = true;
-        isTxLimitExempt[marketingFeeReceiver] = true;
-        isTxLimitExempt[address(this)] = true;
+        permissions[msg.sender].isTxLimitExempt = true;
+        permissions[marketingFeeReceiver].isTxLimitExempt = true;
+        permissions[address(this)].isTxLimitExempt = true;
         // exempt important addresses from receiving Rewards
-        isDividendExempt[pair] = true;
-        isDividendExempt[address(this)] = true;
+        permissions[pair].isDividendExempt = true;
+        permissions[address(this)].isDividendExempt = true;
         // declare LP as Liquidity Pool
-        isLiquidityPool[pair] = true;
+        permissions[pair].isLiquidityPool = true;
         // approve router of total supply
         approve(_dexRouter, _totalSupply);
         approve(address(pair), _totalSupply);
@@ -147,16 +155,24 @@ contract BTCVault is IERC20, ReentrancyGuard {
     function totalSupply() external view override returns (uint256) { return _totalSupply; }
     function balanceOf(address account) public view override returns (uint256) { return _balances[account]; }
     function allowance(address holder, address spender) external view override returns (uint256) { return _allowances[holder][spender]; }
-    function name() public pure returns (string memory) {
+    function name() public view returns (string memory) {
         return _name;
     }
 
-    function symbol() public pure returns (string memory) {
+    function symbol() public view returns (string memory) {
         return _symbol;
     }
 
     function decimals() public pure override returns (uint8) {
         return _decimals;
+    }
+    
+    function setName(string calldata nName) external onlyOwner {
+        _name = nName;
+    }
+    
+    function setSymbol(string calldata nSymbol) external onlyOwner {
+        _symbol = nSymbol;
     }
 
     function approve(address spender, uint256 amount) public override returns (bool) {
@@ -200,7 +216,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         require(recipient != address(0), "BEP20: Invalid Transfer");
         require(amount > 0, "Zero Amount");
         // check if we have reached the transaction limit
-        require(amount <= _maxTxAmount || isTxLimitExempt[sender], "TX Limit");
+        require(amount <= _maxTxAmount || permissions[sender].isTxLimitExempt, "TX Limit");
         if (tokenLockers[sender].isLocked) {
             if (tokenLockers[sender].startTime.add(tokenLockers[sender].duration) > block.number) {
                 require(amount <= tokenLockers[sender].nTokens, 'Exceeds Token Lock Allowance');
@@ -224,9 +240,6 @@ contract BTCVault is IERC20, ReentrancyGuard {
         if(shouldSwapBack()) {
             swapBack();
             (amountReceived, success) = handleTransferBody(sender, recipient, amount);
-        } else if (shouldDepositDistributor()) {
-            distributor.deposit();
-            (amountReceived, success) = handleTransferBody(sender, recipient, amount);
         } else {
             (amountReceived, success) = handleTransferBody(sender, recipient, amount);
             try distributor.process(distributorGas) {} catch {}
@@ -241,14 +254,14 @@ contract BTCVault is IERC20, ReentrancyGuard {
         // subtract balance from sender
         _balances[sender] = _balances[sender].sub(amount, "Insufficient Balance");
         // amount receiver should receive
-        uint256 amountReceived = (isFeeExempt[sender] || isFeeExempt[recipient]) ? amount : takeFee(sender, recipient, amount);
+        uint256 amountReceived = (permissions[sender].isFeeExempt || permissions[recipient].isFeeExempt) ? amount : takeFee(sender, recipient, amount);
         // add amount to recipient
         _balances[recipient] = _balances[recipient].add(amountReceived);
         // set shares for distributors
-        if(!isDividendExempt[sender]){ 
+        if(!permissions[sender].isDividendExempt){ 
             distributor.setShare(sender, _balances[sender]);
         }
-        if(!isDividendExempt[recipient]){ 
+        if(!permissions[sender].isDividendExempt){ 
             distributor.setShare(recipient, _balances[recipient]);
         }
         // return the amount received by receiver
@@ -257,9 +270,9 @@ contract BTCVault is IERC20, ReentrancyGuard {
     
     /** Takes Fee and Stores in contract Or Deletes From Circulation */
     function takeFee(address sender, address receiver, uint256 amount) internal returns (uint256) {
-        uint256 tFee = isLiquidityPool[receiver] ? totalFeeSells : isLiquidityPool[sender] ? totalFeeBuys : totalFeeTransfers;
+        uint256 tFee = permissions[receiver].isLiquidityPool ? totalFeeSells : permissions[sender].isLiquidityPool ? totalFeeBuys : totalFeeTransfers;
         uint256 feeAmount = amount.mul(tFee).div(feeDenominator);
-        if (isLiquidityPool[receiver] || !burnEnabled) {
+        if (permissions[receiver].isLiquidityPool || !burnEnabled) {
             _balances[address(this)] = _balances[address(this)].add(feeAmount);
         } else {
             // update Total Supply
@@ -272,10 +285,10 @@ contract BTCVault is IERC20, ReentrancyGuard {
     
     /** True if we should swap from Vault => BNB */
     function shouldSwapBack() internal view returns (bool) {
-        return !isLiquidityPool[msg.sender]
+        return !permissions[msg.sender].isLiquidityPool
         && !inSwap
         && swapEnabled
-        && _balances[address(this)] >= swapThreshold;
+        && _balances[address(this)] > swapThreshold;
     }
     
     /**
@@ -294,7 +307,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         if (marketingTokens > 0) {
             _balances[address(this)] = _balances[address(this)].sub(marketingTokens);
             _balances[marketingFeeReceiver] = _balances[marketingFeeReceiver].add(marketingTokens);
-            if (!isDividendExempt[marketingFeeReceiver]) {
+            if (!permissions[marketingFeeReceiver].isDividendExempt) {
                 distributor.setShare(marketingFeeReceiver, _balances[marketingFeeReceiver]);
             }
             emit Transfer(address(this), marketingFeeReceiver, marketingTokens);
@@ -306,19 +319,13 @@ contract BTCVault is IERC20, ReentrancyGuard {
             swapAmount,
             0,
             path,
-            address(distributor),
+            address(this),
             block.timestamp.add(30)
         ) {} catch{return;}
+        
+        fuelDistributorAndBurner();
         // Tell The Blockchain
         emit SwappedBack(swapAmount, burnAmount, marketingTokens);
-    }
-    
-    /** Should We Deposit Funds inside of Distributor */
-    function shouldDepositDistributor() private view returns(bool) {
-        return !isLiquidityPool[msg.sender]
-        && !inSwap
-        && swapEnabled
-        && address(distributor).balance >= minimumToDeposit;
     }
 
     /** Removes Tokens From Circulation */
@@ -341,37 +348,22 @@ contract BTCVault is IERC20, ReentrancyGuard {
         return true;
     }
     
+    /** Deposits BNB To Distributor And Burner*/
+    function fuelDistributorAndBurner() private returns (bool) {
+        // allocate percentage to buy/burn ETHVault+SafeVault
+        uint256 forBurning = address(this).balance.div(8);
+        uint256 forDistribution = address(this).balance.sub(forBurning);
+        bool succ; bool succTwo;
+        // send all bnb to distributor
+        (succ,) = payable(address(distributor)).call{value: forDistribution}("");
+        (succTwo,) = payable(address(burner)).call{value: forBurning}("");
+        return succ && succTwo;
+    }
     
     ////////////////////////////////////
     /////    EXTERNAL FUNCTIONS    /////
     ////////////////////////////////////
     
-    
-    
-    /** Claim Your Vault Rewards Early */
-    function claimParentDividend() external nonReentrant {
-        distributor.claimParentDividend(msg.sender);
-    }
-    
-    /** Claim Your SETH Rewards Manually */
-    function claimMainDividend() external nonReentrant {
-        distributor.claimMainDividend(msg.sender);
-    }
-    
-    /** Disables User From Receiving Automatic Rewards To Enable Options */
-    function disableAutoRewardsForShareholder(bool autoRewardsDisabled) external nonReentrant {
-        distributor.changeAutoRewardsForShareholder(msg.sender, autoRewardsDisabled);
-    }
-    
-    /** Claim Parent Vault Token In External Token */
-    function claimParentDividendInExternalToken(address xTokenDesired) external nonReentrant {
-        distributor.claimxParentDividendInDesiredToken(msg.sender, xTokenDesired);
-    }
-    
-    /** Manually Claim Surge Token Dividend in Different Surge Token */
-    function claimMainDividendInExternalToken(address surgeTokenDesired) external nonReentrant {
-        distributor.claimMainDividendInDesiredSurgeToken(msg.sender, surgeTokenDesired);
-    }
     
     /** Deletes the portion of holdings from sender */
     function deleteBag(uint256 nTokens) external nonReentrant returns(bool){
@@ -382,7 +374,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         // remove tokens from total supply
         _totalSupply = _totalSupply.sub(nTokens);
         // set share to be new balance
-        if (!isDividendExempt[msg.sender]) {
+        if (!permissions[msg.sender].isDividendExempt) {
             distributor.setShare(msg.sender, _balances[msg.sender]);
         }
         // approve Router for the new total supply
@@ -402,17 +394,17 @@ contract BTCVault is IERC20, ReentrancyGuard {
     
     /** Is Holder Exempt From Fees */
     function getIsFeeExempt(address holder) public view returns (bool) {
-        return isFeeExempt[holder];
+        return permissions[holder].isFeeExempt;
     }
     
     /** Is Holder Exempt From SETH Dividends */
     function getIsDividendExempt(address holder) public view returns (bool) {
-        return isDividendExempt[holder];
+        return permissions[holder].isDividendExempt;
     }
     
     /** Is Holder Exempt From Transaction Limit */
     function getIsTxLimitExempt(address holder) public view returns (bool) {
-        return isTxLimitExempt[holder];
+        return permissions[holder].isTxLimitExempt;
     }
     
     /** True If Tokens Are Locked For Target, False If Unlocked */
@@ -459,15 +451,15 @@ contract BTCVault is IERC20, ReentrancyGuard {
     /** Set Exemption For Holder */
     function setExemptions(address holder, bool feeExempt, bool txLimitExempt, bool _isLiquidityPool) external onlyOwner {
         require(holder != address(0));
-        isFeeExempt[holder] = feeExempt;
-        isTxLimitExempt[holder] = txLimitExempt;
-        isLiquidityPool[holder] = _isLiquidityPool;
+        permissions[holder].isFeeExempt = feeExempt;
+        permissions[holder].isTxLimitExempt = txLimitExempt;
+        permissions[holder].isLiquidityPool = _isLiquidityPool;
         emit SetExemptions(holder, feeExempt, txLimitExempt, _isLiquidityPool);
     }
     
     /** Set Holder To Be Exempt From SETH Dividends */
     function setIsDividendExempt(address holder, bool exempt) external onlyOwner {
-        isDividendExempt[holder] = exempt;
+        permissions[holder].isDividendExempt = exempt;
         if(exempt) {
             distributor.setShare(holder, 0);
         } else {
@@ -486,21 +478,22 @@ contract BTCVault is IERC20, ReentrancyGuard {
         emit UpdateSwapBackSettings(_swapEnabled, _swapThreshold, _canChangeSwapThreshold, _burnEnabled, _minimumToDeposit);
     }
 
-    /** Set Criteria For Surge Distributor */
-    function setDistributionCriteria(uint256 _minPeriod, uint256 _minMainDistribution, uint256 _minParentDistribution) external onlyOwner {
-        distributor.setDistributionCriteria(_minPeriod, _minMainDistribution, _minParentDistribution);
-        emit UpdateDistributorCriteria(_minPeriod, _minMainDistribution, _minParentDistribution);
-    }
-
     /** Should We Transfer To Marketing */
     function setMarketingFundReceiver(address _marketingFeeReceiver) external onlyOwner {
         require(_marketingFeeReceiver != address(0), 'Invalid Address');
-        isTxLimitExempt[marketingFeeReceiver] = false;
+        permissions[marketingFeeReceiver].isTxLimitExempt = false;
         marketingFeeReceiver = _marketingFeeReceiver;
-        isTxLimitExempt[_marketingFeeReceiver] = true;
+        permissions[_marketingFeeReceiver].isTxLimitExempt = true;
         emit UpdateTransferToMarketing(_marketingFeeReceiver);
     }
     
+    /** Updates Burner Contract */
+    function setVaultBurnerContract(address newVaultBurner) external onlyOwner {
+        burner = newVaultBurner;
+        emit UpdateVaultBurner(newVaultBurner);
+    }
+    
+    /** Updates Gas Required For Redistribution */
     function setDistributorGas(uint256 newGas) external onlyOwner {
         require(newGas >= 10**5 && newGas <= 10**7, 'Out Of Range');
         distributorGas = newGas;
@@ -515,11 +508,10 @@ contract BTCVault is IERC20, ReentrancyGuard {
         address _newPair = IUniswapV2Factory(router.factory())
             .createPair(address(this), router.WETH());
         pair = _newPair;
-        isLiquidityPool[_newPair] = true;
-        isDividendExempt[_newPair] = true;
+        permissions[_newPair].isLiquidityPool = true;
+        permissions[_newPair].isDividendExempt = true;
         path[1] = router.WETH();
         internalApprove();
-        distributor.updatePancakeRouterAddress(nRouter);
         emit UpdatePancakeswapRouter(nRouter);
     }
 
@@ -527,18 +519,10 @@ contract BTCVault is IERC20, ReentrancyGuard {
     function setDistributor(address newDistributor) external onlyOwner {
         require(newDistributor != address(distributor), 'Invalid Address');
         require(newDistributor != address(0), 'Invalid Address');
-        distributor.upgradeDistributor(newDistributor);
         distributor = IDistributor(payable(newDistributor));
         emit SwappedDistributor(newDistributor);
     }
 
-    /** Swaps SETH and SafeVault Addresses in case of migration */
-    function setTokenAddresses(address newMain, address newxParent) external onlyOwner {
-        distributor.setMainTokenAddress(newMain);
-        distributor.setParentTokenAddress(newxParent);
-        emit SwappedTokenAddresses(newMain, newxParent);
-    }
-    
     /** Lock Tokens For A User Over A Set Amount of Time */
     function lockTokens(address target, uint256 lockDurationInBlocks, uint256 tokenAllowance) external onlyOwner {
         require(lockDurationInBlocks <= 10512000, 'Invalid Duration');
@@ -568,10 +552,9 @@ contract BTCVault is IERC20, ReentrancyGuard {
     event TransferOwnership(address newOwner);
     event UpdatedDistributorGas(uint256 newGas);
     event SwappedDistributor(address newDistributor);
+    event UpdateVaultBurner(address newVaultBurner);
     event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
     event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
-    event SwappedTokenAddresses(address newMain, address newXParent);
-    event UpdateDistributorCriteria(uint256 minPeriod, uint256 minMainDistribution, uint256 minParentDistribution);
     event UpdateTransferToMarketing(address fundReceiver);
     event UpdateSwapBackSettings(bool swapEnabled, uint256 swapThreshold, bool canChangeSwapThreshold, bool burnEnabled, uint256 minimumBNBToDistribute);
     event UpdatePancakeswapRouter(address newRouter);
