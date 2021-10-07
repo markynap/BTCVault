@@ -82,8 +82,6 @@ contract BTCVault is IERC20, ReentrancyGuard {
     address public marketingFeeReceiver = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
     // CA which buys/burns ETHVault+SafeVault
     address public burner = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
-    // minimum bnb needed for distribution
-    uint256 public minimumToDeposit = 25 * 10**17;
     
     // Pancakeswap V2 Router
     IUniswapV2Router02 router;
@@ -468,14 +466,13 @@ contract BTCVault is IERC20, ReentrancyGuard {
     }
     
     /** Set Settings related to Swaps */
-    function setSwapBackSettings(bool _swapEnabled, uint256 _swapThreshold, bool _canChangeSwapThreshold, uint256 _percentOfCirculatingSupply, bool _burnEnabled, uint256 _minimumToDeposit) external onlyOwner {
+    function setSwapBackSettings(bool _swapEnabled, uint256 _swapThreshold, bool _canChangeSwapThreshold, uint256 _percentOfCirculatingSupply, bool _burnEnabled) external onlyOwner {
         swapEnabled = _swapEnabled;
         swapThreshold = _swapThreshold;
         canChangeSwapThreshold = _canChangeSwapThreshold;
         swapThresholdPercentOfCirculatingSupply = _percentOfCirculatingSupply;
         burnEnabled = _burnEnabled;
-        minimumToDeposit = _minimumToDeposit;
-        emit UpdateSwapBackSettings(_swapEnabled, _swapThreshold, _canChangeSwapThreshold, _burnEnabled, _minimumToDeposit);
+        emit UpdateSwapBackSettings(_swapEnabled, _swapThreshold, _canChangeSwapThreshold, _burnEnabled);
     }
 
     /** Should We Transfer To Marketing */
@@ -556,7 +553,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
     event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
     event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
     event UpdateTransferToMarketing(address fundReceiver);
-    event UpdateSwapBackSettings(bool swapEnabled, uint256 swapThreshold, bool canChangeSwapThreshold, bool burnEnabled, uint256 minimumBNBToDistribute);
+    event UpdateSwapBackSettings(bool swapEnabled, uint256 swapThreshold, bool canChangeSwapThreshold, bool burnEnabled);
     event UpdatePancakeswapRouter(address newRouter);
     event TokensLockedForWallet(address wallet, uint256 duration, uint256 allowanceToSpend);
     event UpdateFees(uint256 buyFee, uint256 sellFee, uint256 transferFee, uint256 burnFee, uint256 reflectionFee);
