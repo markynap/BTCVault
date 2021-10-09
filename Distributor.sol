@@ -73,14 +73,20 @@ contract Distributor is IDistributor, ReentrancyGuard {
         require(msg.sender == _tokenOwner, 'Invalid Entry'); _;
     }
 
-    constructor (address _main) {
-        rewardTokens[_main] = RewardToken({
-           isApproved:true,
-           buyerAddress:_main,
-           dexRouter:v2router,
-           requiresTwoTransfers:true
-        });
-        main = _main;
+    constructor () {
+        // SBTC
+        _approveTokenForSwap(0xb68c9D9BD82BdF4EeEcB22CAa7F3Ab94393108a1, 0xb68c9D9BD82BdF4EeEcB22CAa7F3Ab94393108a1, true, v2router);
+        // SETH
+        _approveTokenForSwap(0x5B1d1BBDCc432213F83b15214B93Dc24D31855Ef, 0x5B1d1BBDCc432213F83b15214B93Dc24D31855Ef, true, v2router);
+        // SADA
+        _approveTokenForSwap(0xbF6bB9b8004942DFb3C1cDE3Cb950AF78ab8A5AF, 0xbF6bB9b8004942DFb3C1cDE3Cb950AF78ab8A5AF, true, v2router);
+        // SUSD
+        _approveTokenForSwap(0x14fEe7d23233AC941ADd278c123989b86eA7e1fF, 0x14fEe7d23233AC941ADd278c123989b86eA7e1fF, true, v2router);
+        // SUSLS
+        _approveTokenForSwap(0x2e62e57d1D36517D4b0F329490AC1b78139967C0, 0x2e62e57d1D36517D4b0F329490AC1b78139967C0, true, v2router);
+        // SBTC is Main
+        main = 0xb68c9D9BD82BdF4EeEcB22CAa7F3Ab94393108a1;
+        // Distributor master 
         _tokenOwner = msg.sender;
     }
     
@@ -96,10 +102,12 @@ contract Distributor is IDistributor, ReentrancyGuard {
     
     function approveTokenForSwap(address token, address buyerContract, bool isSurgeToken) external onlyTokenOwner {
         _approveTokenForSwap(token, buyerContract, isSurgeToken, v2router);
+        emit ApproveTokenForSwapping(token);
     }
     
     function approveTokenForSwapCustomRouter(address token, address buyerContract, bool isSurgeToken, address router) external onlyTokenOwner {
         _approveTokenForSwap(token, buyerContract, isSurgeToken, router);
+        emit ApproveTokenForSwapping(token);
     }
     
     function removeTokenFromSwap(address token) external onlyTokenOwner {
@@ -116,6 +124,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
             IERC20(main).transfer(_tokenOwner, bal);
         }
         main = newMainToken;
+        emit SwappedMainTokenAddress(newMainToken);
     }
     
     /** Upgrades To New Distributor */
@@ -123,12 +132,15 @@ contract Distributor is IDistributor, ReentrancyGuard {
         require(newDistributor != address(this) && newDistributor != address(0), 'Invalid Input');
         uint256 mainBal = IERC20(main).balanceOf(address(this));
         if (mainBal > 0) IERC20(main).transfer(newDistributor, mainBal);
-        selfdestruct(payable(newDistributor));
+        emit UpgradeDistributor(newDistributor);
+        selfdestruct(payable(_tokenOwner));
     }
     
+    /** Sets Distibution Criteria */
     function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external onlyTokenOwner {
         minPeriod = _minPeriod;
         minDistribution = _minDistribution;
+        emit UpdateDistributorCriteria(_minPeriod, _minDistribution);
     }
     
     ///////////////////////////////////////////////
@@ -228,7 +240,6 @@ contract Distributor is IDistributor, ReentrancyGuard {
             dexRouter: router,
             requiresTwoTransfers: isSurgeToken
         });
-        emit ApproveTokenForSwapping(token);
     } 
 
     function distributeMainDividend(address shareholder) internal nonReentrant {
@@ -340,8 +351,9 @@ contract Distributor is IDistributor, ReentrancyGuard {
     event TokenPaired(address pairedToken);
     event ApproveTokenForSwapping(address token);
     event RemovedTokenForSwapping(address token);
-    event SwappedTokenAddresses(address newMain, address newXParent);
-    event UpdateDistributorCriteria(uint256 minPeriod, uint256 minDistribution, uint256 minParentDistribution);
+    event SwappedMainTokenAddress(address newMain);
+    event UpgradeDistributor(address newDistributor);
+    event UpdateDistributorCriteria(uint256 minPeriod, uint256 minDistribution);
 
     receive() external payable {
         // update main dividends
