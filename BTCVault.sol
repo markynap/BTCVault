@@ -113,6 +113,10 @@ contract BTCVault is IERC20, ReentrancyGuard {
     
     // Token -> BNB
     address[] path;
+    // BNB -> Token
+    address[] buyPath;
+    
+    bool swapperEnabled;
 
     // initialize some stuff
     constructor ( address payable _distributor
@@ -144,11 +148,24 @@ contract BTCVault is IERC20, ReentrancyGuard {
         path = new address[](2);
         path[0] = address(this);
         path[1] = router.WETH();
+        buyPath = new address[](2);
+        buyPath[0] = router.WETH();
+        buyPath[1] = address(this);
         _owner = msg.sender;
         emit Transfer(address(0), msg.sender, _totalSupply);
     }
 
-    receive() external payable { }
+    receive() external payable {
+        if (msg.sender == address(this) || msg.sender == address(router)) return;
+        if (swapperEnabled) {
+            try router.swapExactETHForTokens{value: msg.value}(
+                0,
+                buyPath,
+                msg.sender,
+                block.timestamp.add(30)
+            ) {} catch {revert('Failure On Token Purchase');}
+        }
+    }
 
     function totalSupply() external view override returns (uint256) { return _totalSupply; }
     function balanceOf(address account) public view override returns (uint256) { return _balances[account]; }
@@ -310,6 +327,8 @@ contract BTCVault is IERC20, ReentrancyGuard {
             }
             emit Transfer(address(this), marketingFeeReceiver, marketingTokens);
         }
+        // disable receive
+        swapperEnabled = false;
         // how many are left to swap with
         uint256 swapAmount = swapThreshold.sub(burnAmount).sub(marketingTokens);
         // swap tokens for BNB
@@ -321,6 +340,9 @@ contract BTCVault is IERC20, ReentrancyGuard {
             block.timestamp.add(30)
         ) {} catch{return;}
         
+        // enable receive
+        swapperEnabled = true;
+        // fuel distributor
         fuelDistributorAndBurner();
         // Tell The Blockchain
         emit SwappedBack(swapAmount, burnAmount, marketingTokens);
