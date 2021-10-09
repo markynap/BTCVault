@@ -57,8 +57,8 @@ contract Distributor is IDistributor, ReentrancyGuard {
     uint256 public minPeriod = 14400;
     // auto claim every hour if able
     uint256 public constant minAutoPeriod = 1200;
-    // 20,000 Minimum Distribution For Main
-    uint256 public minDistribution = 5 * 10**16;
+    // 0.025 minimum bnb distribution
+    uint256 public minDistribution = 25 * 10**15;
     // current index in shareholder array 
     uint256 currentIndex;
     
@@ -217,6 +217,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     function addShareholder(address shareholder) internal {
         shareholderIndexes[shareholder] = shareholders.length;
         shareholders.push(shareholder);
+        emit AddedShareholder(shareholder);
     }
 
     function removeShareholder(address shareholder) internal { 
@@ -224,6 +225,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
         shareholderIndexes[shareholders[shareholders.length-1]] = shareholderIndexes[shareholder]; 
         shareholders.pop();
         delete shareholderIndexes[shareholder];
+        emit RemovedShareholder(shareholder);
     }
     
     function _setRewardTokenForHolder(address holder, address token) private {
@@ -354,6 +356,8 @@ contract Distributor is IDistributor, ReentrancyGuard {
     event RemovedTokenForSwapping(address token);
     event SwappedMainTokenAddress(address newMain);
     event UpgradeDistributor(address newDistributor);
+    event AddedShareholder(address shareholder);
+    event RemovedShareholder(address shareholder);
     event SetRewardTokenForHolder(address holder, address desiredRewardToken);
     event UpdateDistributorCriteria(uint256 minPeriod, uint256 minDistribution);
 
