@@ -90,7 +90,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
 
     // gas for distributor
     IDistributor public distributor;
-    uint256 distributorGas = 400000;
+    uint256 distributorGas = 800000;
     
     // in charge of swapping
     bool public swapEnabled = true;
