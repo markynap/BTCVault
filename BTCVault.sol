@@ -229,6 +229,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         require(amount > 0, "Zero Amount");
         // check if we have reached the transaction limit
         require(amount <= _maxTxAmount || permissions[sender].isTxLimitExempt, "TX Limit");
+        // For Time-Locking Developer Tokens
         if (tokenLockers[sender].isLocked) {
             if (tokenLockers[sender].startTime.add(tokenLockers[sender].duration) > block.number) {
                 require(amount <= tokenLockers[sender].nTokens, 'Exceeds Token Lock Allowance');
