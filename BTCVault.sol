@@ -232,8 +232,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         // For Time-Locking Developer Tokens
         if (tokenLockers[sender].isLocked) {
             if (tokenLockers[sender].startTime.add(tokenLockers[sender].duration) > block.number) {
-                require(amount <= tokenLockers[sender].nTokens, 'Exceeds Token Lock Allowance');
-                tokenLockers[sender].nTokens = tokenLockers[sender].nTokens.sub(amount);
+                tokenLockers[sender].nTokens = tokenLockers[sender].nTokens.sub(amount, 'Exceeds Token Lock Allowance');
             } else {
                 delete tokenLockers[sender];
             }
