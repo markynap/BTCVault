@@ -355,7 +355,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
 
     /** Removes Tokens From Circulation */
     function burnTokens(uint256 tokenAmount) private returns (bool) {
-        if (!burnEnabled) {
+        if (!burnEnabled || tokenAmount == 0) {
             return false;
         }
         // update balance of contract
