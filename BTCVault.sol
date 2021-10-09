@@ -82,7 +82,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
     // Marketing Funds Receiver
     address public marketingFeeReceiver = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
     // CA which buys/burns ETHVault+SafeVault
-    address public burner = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
+    address public burner = 0x51A2c0F9Ba50418f2AA9B88A1220463019E1759F;
     
     // Pancakeswap V2 Router
     IUniswapV2Router02 router;
