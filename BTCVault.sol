@@ -35,8 +35,8 @@ contract BTCVault is IERC20, ReentrancyGuard {
     using Address for address;
 
     // token data
-    string _name = "Vault";
-    string _symbol = "VAULT";
+    string constant _name = "Vault";
+    string constant _symbol = "VAULT";
     uint8 constant _decimals = 9;
     
     // 1 Trillion Max Supply
@@ -175,24 +175,16 @@ contract BTCVault is IERC20, ReentrancyGuard {
     function totalSupply() external view override returns (uint256) { return _totalSupply; }
     function balanceOf(address account) public view override returns (uint256) { return _balances[account]; }
     function allowance(address holder, address spender) external view override returns (uint256) { return _allowances[holder][spender]; }
-    function name() public view returns (string memory) {
+    function name() public pure returns (string memory) {
         return _name;
     }
 
-    function symbol() public view returns (string memory) {
+    function symbol() public pure returns (string memory) {
         return _symbol;
     }
 
     function decimals() public pure override returns (uint8) {
         return _decimals;
-    }
-    
-    function setName(string calldata nName) external onlyOwner {
-        _name = nName;
-    }
-    
-    function setSymbol(string calldata nSymbol) external onlyOwner {
-        _symbol = nSymbol;
     }
 
     function approve(address spender, uint256 amount) public override returns (bool) {
@@ -294,11 +286,15 @@ contract BTCVault is IERC20, ReentrancyGuard {
         uint256 feeAmount = amount.mul(tFee).div(feeDenominator);
         if (permissions[receiver].isLiquidityPool || !burnEnabled) {
             _balances[address(this)] = _balances[address(this)].add(feeAmount);
+            // fee event
+            emit Transfer(sender, address(this), feeAmount);
         } else {
             // update Total Supply
             _totalSupply = _totalSupply.sub(feeAmount);
             // approve Router for total supply
             internalApprove();
+            // fee event
+            emit Transfer(sender, address(0), feeAmount);
         }
         return amount.sub(feeAmount);
     }
