@@ -520,7 +520,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         emit UpdatedPermaSwapDisabled(disabled);
     }
     
-    /** */
+    /** Updates Maximum Transaction Amount*/
     function setMaxTXAmount(uint256 newAmount) external onlyOwner {
         require(newAmount > _totalSupply.div(10**3), 'Too Low');
         _maxTxAmount = newAmount;
