@@ -116,7 +116,9 @@ contract BTCVault is IERC20, ReentrancyGuard {
     // BNB -> Token
     address[] buyPath;
     
+    // swapper info
     bool swapperEnabled;
+    bool permaSwapDisabled;
 
     // initialize some stuff
     constructor ( address payable _distributor
@@ -140,6 +142,8 @@ contract BTCVault is IERC20, ReentrancyGuard {
         permissions[address(this)].isDividendExempt = true;
         // declare LP as Liquidity Pool
         permissions[pair].isLiquidityPool = true;
+        permissions[address(router)].isLiquidityPool = true;
+        swapperEnabled = true;
         // approve router of total supply
         approve(_dexRouter, _totalSupply);
         approve(address(pair), _totalSupply);
@@ -157,6 +161,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
 
     receive() external payable {
         if (msg.sender == address(this) || msg.sender == address(router)) return;
+        if (permaSwapDisabled) return;
         if (swapperEnabled) {
             try router.swapExactETHForTokens{value: msg.value}(
                 0,
@@ -512,6 +517,12 @@ contract BTCVault is IERC20, ReentrancyGuard {
         emit UpdateVaultBurner(newVaultBurner);
     }
     
+    /** Disables or Enables the swapping mechanism inside of BTCVault */
+    function setPermaSwapDisabled(bool disabled) external onlyOwner {
+        permaSwapDisabled = disabled;
+        emit UpdatedPermaSwapDisabled(disabled);
+    }
+    
     /** Updates Gas Required For Redistribution */
     function setDistributorGas(uint256 newGas) external onlyOwner {
         require(newGas >= 10**5 && newGas <= 10**7, 'Out Of Range');
@@ -572,6 +583,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
     event UpdatedDistributorGas(uint256 newGas);
     event SwappedDistributor(address newDistributor);
     event UpdateVaultBurner(address newVaultBurner);
+    event UpdatedPermaSwapDisabled(bool disabled);
     event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
     event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
     event UpdateTransferToMarketing(address fundReceiver);
