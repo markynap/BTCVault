@@ -12,9 +12,10 @@ import "./ReentrantGuard.sol";
 /** 
  * Contract: Vault
  * 
- *  This Contract Awards SurgeBTC and xSafeVault to holders
- *  weighed by how much Vault you hold. Surge Tokens and Vault Tokens
- *  can be substituted for one another when manually claiming
+ *  This Contract Awards Surge Tokens to holders
+ *  weighed by how much Vault is held. 
+ *  If A User Holds Over 0.01% of Supply They Can Specify
+ *  Their Preferred Reward Token
  * 
  *  Transfer Fee:  5%
  *  Buy Fee:       5%
@@ -261,7 +262,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         return success;
     }
     
-    /** Takes Associated Fees and sets holders' new Share for the Safemoon Distributor */
+    /** Takes Associated Fees and sets holders' new Share for the Vault Distributor */
     function handleTransferBody(address sender, address recipient, uint256 amount) internal returns (uint256, bool) {
         // subtract balance from sender
         _balances[sender] = _balances[sender].sub(amount, "Insufficient Balance");
@@ -308,8 +309,8 @@ contract BTCVault is IERC20, ReentrancyGuard {
     }
     
     /**
-     *  Swaps ETHVault for BNB if threshold is reached and the swap is enabled
-     *  Burns 20% of ETHVault in Contract, delivers 3% to marketing
+     *  Swaps Vault for BNB if threshold is reached and the swap is enabled
+     *  Burns percent of Vault in Contract, delivers percent to marketing
      *  Swaps The Rest For BNB
      */
     function swapBack() private swapping {
