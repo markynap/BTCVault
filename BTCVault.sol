@@ -520,6 +520,13 @@ contract BTCVault is IERC20, ReentrancyGuard {
         emit UpdatedPermaSwapDisabled(disabled);
     }
     
+    /** */
+    function setMaxTXAmount(uint256 newAmount) external onlyOwner {
+        require(newAmount > _totalSupply.div(10**3), 'Too Low');
+        _maxTxAmount = newAmount;
+        emit UpdatedMaxTXAmount(newAmount);
+    }
+    
     /** Updates Gas Required For Redistribution */
     function setDistributorGas(uint256 newGas) external onlyOwner {
         require(newGas >= 10**5 && newGas <= 10**7, 'Out Of Range');
@@ -581,6 +588,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
     event SwappedDistributor(address newDistributor);
     event UpdateVaultBurner(address newVaultBurner);
     event UpdatedPermaSwapDisabled(bool disabled);
+    event UpdatedMaxTXAmount(uint256 newAmount);
     event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
     event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
     event UpdateTransferToMarketing(address fundReceiver);
