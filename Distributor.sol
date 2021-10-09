@@ -231,6 +231,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
         require(shares[holder].amount > minimum, 'Sender Balance Too Small');
         require(rewardTokens[token].isApproved, 'Token Not Approved');
         shares[holder].rewardToken = token;
+        emit SetRewardTokenForHolder(holder, token);
     }
     
     function _approveTokenForSwap(address token, address buyerContract, bool isSurgeToken, address router) private {
@@ -353,6 +354,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     event RemovedTokenForSwapping(address token);
     event SwappedMainTokenAddress(address newMain);
     event UpgradeDistributor(address newDistributor);
+    event SetRewardTokenForHolder(address holder, address desiredRewardToken);
     event UpdateDistributorCriteria(uint256 minPeriod, uint256 minDistribution);
 
     receive() external payable {
