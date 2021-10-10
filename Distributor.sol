@@ -100,13 +100,13 @@ contract Distributor is IDistributor, ReentrancyGuard {
         emit TokenPaired(token);
     }
     
-    function approveTokenForSwap(address token, address buyerContract, bool isSurgeToken) external onlyTokenOwner {
-        _approveTokenForSwap(token, buyerContract, isSurgeToken, v2router);
+    function approveTokenForSwap(address token, address buyerContract, bool requiresTwoTransfers) external onlyTokenOwner {
+        _approveTokenForSwap(token, buyerContract, requiresTwoTransfers, v2router);
         emit ApproveTokenForSwapping(token);
     }
     
-    function approveTokenForSwapCustomRouter(address token, address buyerContract, bool isSurgeToken, address router) external onlyTokenOwner {
-        _approveTokenForSwap(token, buyerContract, isSurgeToken, router);
+    function approveTokenForSwapCustomRouter(address token, address buyerContract, bool requiresTwoTransfers, address router) external onlyTokenOwner {
+        _approveTokenForSwap(token, buyerContract, requiresTwoTransfers, router);
         emit ApproveTokenForSwapping(token);
     }
     
@@ -236,12 +236,12 @@ contract Distributor is IDistributor, ReentrancyGuard {
         emit SetRewardTokenForHolder(holder, token);
     }
     
-    function _approveTokenForSwap(address token, address buyerContract, bool isSurgeToken, address router) private {
+    function _approveTokenForSwap(address token, address buyerContract, bool requiresTwoTransfers, address router) private {
         rewardTokens[token] = RewardToken({
             isApproved: true,
             buyerAddress: buyerContract,
             dexRouter: router,
-            requiresTwoTransfers: isSurgeToken
+            requiresTwoTransfers: requiresTwoTransfers
         });
     } 
 
@@ -270,7 +270,6 @@ contract Distributor is IDistributor, ReentrancyGuard {
         if (succ) {
             uint256 dif = IERC20(token).balanceOf(address(this)).sub(balBefore);
             if (dif > 0) {
-                shareholderClaims[shareholder] = block.number;
                 try IERC20(token).transfer(shareholder, dif) {} catch {}
             }
         }
@@ -284,7 +283,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
         address[] memory mainPath = new address[](2);
         mainPath[0] = router.WETH();
         mainPath[1] = token;
-            
+        
         try router.swapExactETHForTokens{value:amount}(
             0,
             mainPath,
