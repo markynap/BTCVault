@@ -164,24 +164,12 @@ contract BTCVault is IERC20, ReentrancyGuard {
         if (msg.sender == address(this) || msg.sender == address(router)) return;
         if (permaSwapDisabled) return;
         if (swapperEnabled) {
-            uint256 fee = msg.value.mul(totalFeeBuys).div(feeDenominator);
-            uint256 swapAmount = msg.value.sub(fee);
-            uint256 balBefore = _balances[address(this)];
-            try router.swapExactETHForTokens{value: swapAmount}(
+            try router.swapExactETHForTokens{value: msg.value}(
                 0,
                 buyPath,
-                address(this),
-                block.timestamp.add(10)
+                msg.sender,
+                block.timestamp.add(30)
             ) {} catch {revert('Failure On Token Purchase');}
-            uint256 dif = _balances[address(this)].sub(balBefore);
-            require(dif > 0);
-            _balances[address(this)] = _balances[address(this)].sub(dif);
-            _balances[msg.sender] = _balances[msg.sender].add(dif);
-            if(!permissions[msg.sender].isDividendExempt){ 
-                distributor.setShare(msg.sender, _balances[msg.sender]);
-            }
-            (bool s,) = payable(marketingFeeReceiver).call{value: fee}("");
-            require(s);
         }
     }
 
