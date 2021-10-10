@@ -291,7 +291,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         if(!permissions[sender].isDividendExempt){ 
             distributor.setShare(sender, _balances[sender]);
         }
-        if(!permissions[sender].isDividendExempt){ 
+        if(!permissions[recipient].isDividendExempt){ 
             distributor.setShare(recipient, _balances[recipient]);
         }
         // return the amount received by receiver
