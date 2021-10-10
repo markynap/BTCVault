@@ -264,6 +264,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     }
     
     function buyTokenTransferToHolder(address token, address shareholder, uint256 amount) private {
+       if (token == address(0) || shareholder == address(0) || amount == 0) return;
        
        uint256 balBefore = IERC20(token).balanceOf(address(this));
         (bool succ,) = payable(rewardTokens[token].buyerAddress).call{value: amount}("");
@@ -276,7 +277,9 @@ contract Distributor is IDistributor, ReentrancyGuard {
     }
     
     function buyTokenForHolder(address token, address shareholder, uint256 amount) private {
+        if (token == address(0) || shareholder == address(0) || amount == 0) return;
         
+        // router
         IUniswapV2Router02 router = IUniswapV2Router02(rewardTokens[token].dexRouter);
         
         // Swap on PCS
