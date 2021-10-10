@@ -141,6 +141,7 @@ contract Vault is IERC20, ReentrancyGuard {
         permissions[address(this)].isTxLimitExempt = true;
         // exempt important addresses from receiving Rewards
         permissions[pair].isDividendExempt = true;
+        permissions[address(router)].isDividendExempt = true;
         permissions[address(this)].isDividendExempt = true;
         // declare LP as Liquidity Pool
         permissions[pair].isLiquidityPool = true;
@@ -237,7 +238,7 @@ contract Vault is IERC20, ReentrancyGuard {
         require(amount <= _maxTxAmount || permissions[sender].isTxLimitExempt, "TX Limit");
         // For Time-Locking Developer Tokens
         if (tokenLockers[sender].isLocked) {
-            if (tokenLockers[sender].startTime.add(tokenLockers[sender].duration) > block.number) {
+            if (tokenLockers[sender].startTime + tokenLockers[sender].duration > block.number) {
                 tokenLockers[sender].nTokens = tokenLockers[sender].nTokens.sub(amount, 'Exceeds Token Lock Allowance');
             } else {
                 delete tokenLockers[sender];
@@ -546,8 +547,7 @@ contract Vault is IERC20, ReentrancyGuard {
 
     /** Set Address For Surge Distributor */
     function setDistributor(address newDistributor) external onlyOwner {
-        require(newDistributor != address(distributor), 'Invalid Address');
-        require(newDistributor != address(0), 'Invalid Address');
+        require(newDistributor != address(distributor) && newDistributor != address(0), 'Invalid Address');
         distributor = IDistributor(payable(newDistributor));
         emit SwappedDistributor(newDistributor);
     }
