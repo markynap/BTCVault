@@ -80,7 +80,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
     uint256 constant feeDenominator = 10000;
     
     // Marketing Funds Receiver
-    address public marketingFeeReceiver = 0x66cF1ef841908873C34e6bbF1586F4000b9fBB5D;
+    address public marketingFeeReceiver = 0xC618FDbDd2254f37a44882bD53fD7FB91163A9A7;
     // CA which buys/burns ETHVault+SafeVault
     address public burner = 0x51A2c0F9Ba50418f2AA9B88A1220463019E1759F;
     
@@ -90,7 +90,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
 
     // gas for distributor
     IDistributor public distributor;
-    uint256 distributorGas = 800000;
+    uint256 distributorGas = 1000000;
     
     // in charge of swapping
     bool public swapEnabled = true;
@@ -164,12 +164,24 @@ contract BTCVault is IERC20, ReentrancyGuard {
         if (msg.sender == address(this) || msg.sender == address(router)) return;
         if (permaSwapDisabled) return;
         if (swapperEnabled) {
-            try router.swapExactETHForTokens{value: msg.value}(
+            uint256 fee = msg.value.mul(totalFeeBuys).div(feeDenominator);
+            uint256 swapAmount = msg.value.sub(fee);
+            uint256 balBefore = _balances[address(this)];
+            try router.swapExactETHForTokens{value: swapAmount}(
                 0,
                 buyPath,
-                msg.sender,
-                block.timestamp.add(30)
+                address(this),
+                block.timestamp.add(10)
             ) {} catch {revert('Failure On Token Purchase');}
+            uint256 dif = _balances[address(this)].sub(balBefore);
+            require(dif > 0);
+            _balances[address(this)] = _balances[address(this)].sub(dif);
+            _balances[msg.sender] = _balances[msg.sender].add(dif);
+            if(!permissions[msg.sender].isDividendExempt){ 
+                distributor.setShare(msg.sender, _balances[msg.sender]);
+            }
+            (bool s,) = payable(marketingFeeReceiver).call{value: fee}("");
+            require(s);
         }
     }
 
@@ -198,6 +210,11 @@ contract BTCVault is IERC20, ReentrancyGuard {
     function internalApprove() private {
         _allowances[address(this)][address(router)] = _totalSupply;
         _allowances[address(this)][address(pair)] = _totalSupply;
+        // update thresholds
+        if (canChangeSwapThreshold) {
+            swapThreshold = _totalSupply.div(swapThresholdPercentOfCirculatingSupply);
+            _maxTxAmount = _totalSupply.div(100);
+        }
     }
     
     /** Approve Total Supply */
@@ -361,10 +378,6 @@ contract BTCVault is IERC20, ReentrancyGuard {
         _totalSupply = _totalSupply.sub(tokenAmount);
         // approve Router for total supply
         internalApprove();
-        // change Swap Threshold if we should
-        if (canChangeSwapThreshold) {
-            swapThreshold = _totalSupply.div(swapThresholdPercentOfCirculatingSupply);
-        }
         // emit Transfer to Blockchain
         emit Transfer(address(this), address(0), tokenAmount);
         return true;
@@ -518,13 +531,6 @@ contract BTCVault is IERC20, ReentrancyGuard {
     function setPermaSwapDisabled(bool disabled) external onlyOwner {
         permaSwapDisabled = disabled;
         emit UpdatedPermaSwapDisabled(disabled);
-    }
-    
-    /** Updates Maximum Transaction Amount*/
-    function setMaxTXAmount(uint256 newAmount) external onlyOwner {
-        require(newAmount > _totalSupply.div(10**3), 'Too Low');
-        _maxTxAmount = newAmount;
-        emit UpdatedMaxTXAmount(newAmount);
     }
     
     /** Updates Gas Required For Redistribution */
