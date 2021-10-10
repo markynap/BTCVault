@@ -24,12 +24,12 @@ import "./ReentrantGuard.sol";
  *  Buys/Transfers Directly Deletes Tokens From Fees
  * 
  *  Sell Fees Go Toward:
- *  80.5% SurgeBTC Distribution
- *  11.5% SafeVault+ETHVault Buy+Burn
+ *  83% SurgeBTC Distribution
+ *  9% SafeVault+ETHVault Buy+Burn
  *  4% Burn
  *  4% Marketing
  */
-contract BTCVault is IERC20, ReentrancyGuard {
+contract Vault is IERC20, ReentrancyGuard {
     
     using SafeMath for uint256;
     using SafeMath for uint8;
@@ -374,12 +374,13 @@ contract BTCVault is IERC20, ReentrancyGuard {
     /** Deposits BNB To Distributor And Burner*/
     function fuelDistributorAndBurner() private returns (bool) {
         // allocate percentage to buy/burn ETHVault+SafeVault
-        uint256 forBurning = address(this).balance.div(8);
+        uint256 forBurning = address(this).balance.div(10);
         uint256 forDistribution = address(this).balance.sub(forBurning);
         bool succ; bool succTwo;
-        // send all bnb to distributor
+        // send bnb to distributor
         (succ,) = payable(address(distributor)).call{value: forDistribution}("");
         (succTwo,) = payable(address(burner)).call{value: forBurning}("");
+        emit FueledContracts(forBurning, forDistribution);
         return succ && succTwo;
     }
     
@@ -582,7 +583,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
     event SwappedDistributor(address newDistributor);
     event UpdateVaultBurner(address newVaultBurner);
     event UpdatedPermaSwapDisabled(bool disabled);
-    event UpdatedMaxTXAmount(uint256 newAmount);
+    event FueledContracts(uint256 bnbForBurning, uint256 bnbForReflections);
     event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
     event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
     event UpdateTransferToMarketing(address fundReceiver);
