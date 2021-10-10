@@ -229,7 +229,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     }
     
     function _setRewardTokenForHolder(address holder, address token) private {
-        uint256 minimum = IERC20(_token).totalSupply().div(10**5);
+        uint256 minimum = IERC20(_token).totalSupply().div(10**4);
         require(shares[holder].amount > minimum, 'Sender Balance Too Small');
         require(rewardTokens[token].isApproved, 'Token Not Approved');
         shares[holder].rewardToken = token;
