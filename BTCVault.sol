@@ -26,8 +26,8 @@ import "./ReentrantGuard.sol";
  *  Sell Fees Go Toward:
  *  80.5% SurgeBTC Distribution
  *  11.5% SafeVault+ETHVault Buy+Burn
- *  5% Burn
- *  3% Marketing
+ *  4% Burn
+ *  4% Marketing
  */
 contract BTCVault is IERC20, ReentrancyGuard {
     
@@ -70,9 +70,9 @@ contract BTCVault is IERC20, ReentrancyGuard {
     mapping (address => TokenLock) tokenLockers;
     
     // fees
-    uint256 public burnFee = 150;
+    uint256 public burnFee = 125;
     uint256 public reflectionFee = 2750;
-    uint256 public marketingFee = 100;
+    uint256 public marketingFee = 125;
     // total fees
     uint256 totalFeeSells = 3000;
     uint256 totalFeeBuys = 500;
@@ -420,7 +420,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         return permissions[holder].isFeeExempt;
     }
     
-    /** Is Holder Exempt From SETH Dividends */
+    /** Is Holder Exempt From Dividends */
     function getIsDividendExempt(address holder) public view returns (bool) {
         return permissions[holder].isDividendExempt;
     }
@@ -480,7 +480,7 @@ contract BTCVault is IERC20, ReentrancyGuard {
         emit SetExemptions(holder, feeExempt, txLimitExempt, _isLiquidityPool);
     }
     
-    /** Set Holder To Be Exempt From SETH Dividends */
+    /** Set Holder To Be Exempt From Dividends */
     function setIsDividendExempt(address holder, bool exempt) external onlyOwner {
         permissions[holder].isDividendExempt = exempt;
         if(exempt) {
