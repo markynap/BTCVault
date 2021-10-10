@@ -87,7 +87,7 @@ contract Vault is IERC20, ReentrancyGuard {
     
     // Pancakeswap V2 Router
     IUniswapV2Router02 router;
-    address public pair;
+    address private pair;
 
     // gas for distributor
     IDistributor public distributor;
@@ -95,15 +95,15 @@ contract Vault is IERC20, ReentrancyGuard {
     
     // in charge of swapping
     bool public swapEnabled = true;
-    uint256 public swapThreshold = _totalSupply.div(1250); // 800,000,000 tokens
+    uint256 public swapThreshold = _totalSupply.div(2000); // 800,000,000 tokens
     
     // true if our threshold decreases with circulating supply
     bool public canChangeSwapThreshold = false;
-    uint256 public swapThresholdPercentOfCirculatingSupply = 1250;
+    uint256 public swapThresholdPercentOfCirculatingSupply = 2000;
     bool inSwap;
 
     // false to stop the burn
-    bool burnEnabled = true;
+    bool public burnEnabled = true;
     modifier swapping() { inSwap = true; _; inSwap = false; }
     
     // Uniswap Router V2
@@ -120,7 +120,7 @@ contract Vault is IERC20, ReentrancyGuard {
     
     // swapper info
     bool swapperEnabled;
-    bool permaSwapDisabled;
+    bool public _manualSwapperDisabled;
 
     // initialize some stuff
     constructor ( address payable _distributor
@@ -162,8 +162,7 @@ contract Vault is IERC20, ReentrancyGuard {
     }
 
     receive() external payable {
-        if (msg.sender == address(this) || msg.sender == address(router)) return;
-        if (permaSwapDisabled) return;
+        if (msg.sender == address(this) || msg.sender == address(router) || _manualSwapperDisabled) return;
         if (swapperEnabled) {
             try router.swapExactETHForTokens{value: msg.value}(
                 0,
@@ -518,9 +517,9 @@ contract Vault is IERC20, ReentrancyGuard {
     }
     
     /** Disables or Enables the swapping mechanism inside of BTCVault */
-    function setPermaSwapDisabled(bool disabled) external onlyOwner {
-        permaSwapDisabled = disabled;
-        emit UpdatedPermaSwapDisabled(disabled);
+    function setManualSwapperDisabled(bool manualSwapperDisabled) external onlyOwner {
+        _manualSwapperDisabled = manualSwapperDisabled;
+        emit UpdatedManualSwapperDisabled(manualSwapperDisabled);
     }
     
     /** Updates Gas Required For Redistribution */
@@ -583,7 +582,7 @@ contract Vault is IERC20, ReentrancyGuard {
     event UpdatedDistributorGas(uint256 newGas);
     event SwappedDistributor(address newDistributor);
     event UpdateVaultBurner(address newVaultBurner);
-    event UpdatedPermaSwapDisabled(bool disabled);
+    event UpdatedManualSwapperDisabled(bool disabled);
     event FueledContracts(uint256 bnbForBurning, uint256 bnbForReflections);
     event SetExemptions(address holder, bool feeExempt, bool txLimitExempt, bool isLiquidityPool);
     event SwappedBack(uint256 tokensSwapped, uint256 amountBurned, uint256 marketingTokens);
