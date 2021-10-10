@@ -115,6 +115,11 @@ contract Distributor is IDistributor, ReentrancyGuard {
         emit RemovedTokenForSwapping(token);
     }
     
+    function transferTokenOwnership(address newOwner) external onlyTokenOwner {
+        _tokenOwner = newOwner;
+        emit TransferedTokenOwnership(newOwner);
+    }
+    
     /** New Main Address */
     function setMainTokenAddress(address newMainToken) external onlyTokenOwner {
         require(main != newMainToken && newMainToken != address(0), 'Invalid Input');
@@ -360,6 +365,7 @@ contract Distributor is IDistributor, ReentrancyGuard {
     event UpgradeDistributor(address newDistributor);
     event AddedShareholder(address shareholder);
     event RemovedShareholder(address shareholder);
+    event TransferedTokenOwnership(address newOwner);
     event SetRewardTokenForHolder(address holder, address desiredRewardToken);
     event UpdateDistributorCriteria(uint256 minPeriod, uint256 minDistribution);
 
