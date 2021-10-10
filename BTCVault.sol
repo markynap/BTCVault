@@ -11,6 +11,7 @@ import "./ReentrantGuard.sol";
 
 /** 
  * Contract: Vault
+ * Author: DeFi Mark (Markymark)
  * 
  *  This Contract Awards Surge Tokens to holders
  *  weighed by how much Vault is held. 
